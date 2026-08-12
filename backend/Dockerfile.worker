@@ -1,0 +1,5 @@
+# ── CertMgr Celery worker image (shares the API runtime) ────────────────────
+FROM certmgr-api:latest
+
+USER certmgr
+CMD ["celery", "-A", "app.tasks.celery_app:celery_app", "worker", "--loglevel=INFO", "--concurrency=4", "--max-tasks-per-child=200"]

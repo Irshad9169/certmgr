@@ -1,0 +1,141 @@
+# ── CertMgr Enterprise stack ─────────────────────────────────────────────────
+#   postgres   – persistent metadata store
+#   redis      – Celery broker + rate-limit storage
+#   api        – FastAPI (uvicorn) behind nginx
+#   worker     – Celery worker (issuance, renewal, deployment, notifications…)
+#   beat       – Celery beat (scheduled jobs)
+#   nginx      – TLS-terminating reverse proxy + frontend static files
+#
+# Volumes: cert-data (encrypted keys), logs, letsencrypt workdir.
+
+version: "3.9"
+
+x-backend-env: &backend-env
+  CERTMGR_ENVIRONMENT: ${CERTMGR_ENVIRONMENT:-production}
+  CERTMGR_DATABASE_URL: postgresql+psycopg://certmgr:${POSTGRES_PASSWORD:-certmgr}@postgres:5432/certmgr
+  CERTMGR_REDIS_URL: redis://redis:6379/0
+  CERTMGR_SECRET_KEY: ${CERTMGR_SECRET_KEY:?set CERTMGR_SECRET_KEY in .env}
+  CERTMGR_SECRETS_MASTER_KEY: ${CERTMGR_SECRETS_MASTER_KEY:?set CERTMGR_SECRETS_MASTER_KEY in .env}
+  CERTMGR_STORAGE_ROOT: /var/lib/certmgr/certificates
+  CERTMGR_BACKUP_ROOT: /var/lib/certmgr/backups
+  CERTMGR_LOG_ROOT: /var/log/certmgr
+  CERTMGR_TEMP_WORKDIR: /var/lib/certmgr/tmp
+  CERTMGR_CERTBOT_WORKDIR: /etc/letsencrypt
+  CERTMGR_DEFAULT_LETSENCRYPT_EMAIL: ${CERTMGR_DEFAULT_LETSENCRYPT_EMAIL:-ssl-admin@example.com}
+  CERTMGR_JSON_LOGGING: "true"
+  CERTMGR_LOG_LEVEL: ${CERTMGR_LOG_LEVEL:-INFO}
+  CERTMGR_PROMETHEUS_ENABLED: "true"
+  CERTMGR_CORS_ORIGINS: '["https://certmgr.example.com"]'
+  CERTMGR_COOKIE_SECURE: "true"
+  CERTMGR_SMTP_HOST: ${CERTMGR_SMTP_HOST:-smtp.example.com}
+  CERTMGR_SMTP_FROM: ${CERTMGR_SMTP_FROM:-certmgr@example.com}
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: certmgr
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-certmgr}
+      POSTGRES_DB: certmgr
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U certmgr"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+    networks: [backend]
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+    networks: [backend]
+
+  api:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment: *backend-env
+    command: >
+      sh -c "alembic upgrade head &&
+             uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 4 --proxy-headers"
+    volumes:
+      - certdata:/var/lib/certmgr
+      - logs:/var/log/certmgr
+      - letsencrypt:/etc/letsencrypt
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8000/health/live"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    networks: [backend]
+
+  worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment: *backend-env
+    command: ["celery", "-A", "app.tasks.celery_app:celery_app", "worker",
+              "--loglevel=INFO", "--concurrency=4", "--max-tasks-per-child=200"]
+    volumes:
+      - certdata:/var/lib/certmgr
+      - logs:/var/log/certmgr
+      - letsencrypt:/etc/letsencrypt
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+    networks: [backend]
+
+  beat:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment: *backend-env
+    command: ["celery", "-A", "app.tasks.celery_app:celery_app", "beat", "--loglevel=INFO"]
+    volumes:
+      - certdata:/var/lib/certmgr
+      - logs:/var/log/certmgr
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+    networks: [backend]
+
+  nginx:
+    image: nginx:1.27-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./infra/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./infra/nginx/certmgr.conf:/etc/nginx/conf.d/certmgr.conf:ro
+      # Mount the built frontend (Phase 2) or a placeholder directory:
+      - ./frontend/dist:/usr/share/nginx/html:ro
+    depends_on: [api]
+    networks: [backend]
+
+volumes:
+  pgdata:
+  redisdata:
+  certdata:
+  logs:
+  letsencrypt:
+
+networks:
+  backend:
+    driver: bridge

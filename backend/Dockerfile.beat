@@ -1,0 +1,5 @@
+# ── CertMgr Celery beat scheduler image ─────────────────────────────────────
+FROM certmgr-api:latest
+
+USER certmgr
+CMD ["celery", "-A", "app.tasks.celery_app:celery_app", "beat", "--loglevel=INFO"]

@@ -1,0 +1,11 @@
+[Unit]
+Description=Run CertMgr backup verification weekly (Sunday 02:30)
+Requires=certmgr-backup-verify.service
+
+[Timer]
+OnCalendar=Sun *-*-* 02:30:00
+Persistent=true
+RandomizedDelaySec=300
+
+[Install]
+WantedBy=timers.target

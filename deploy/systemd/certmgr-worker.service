@@ -1,0 +1,23 @@
+[Unit]
+Description=CertMgr Celery worker
+After=network-online.target postgresql.service redis.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=certmgr
+Group=certmgr
+WorkingDirectory=/opt/certmgr/backend
+EnvironmentFile=/etc/certmgr/certmgr.env
+ExecStart=/opt/certmgr/backend/.venv/bin/celery -A app.tasks.celery_app:celery_app worker --loglevel=INFO --concurrency=4 --max-tasks-per-child=200
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/certmgr /var/log/certmgr /etc/letsencrypt
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target

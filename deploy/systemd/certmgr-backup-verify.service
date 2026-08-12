@@ -1,0 +1,19 @@
+[Unit]
+Description=CertMgr weekly backup verification (archives + database dumps)
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=certmgr
+Group=certmgr
+WorkingDirectory=/opt/certmgr/backend
+EnvironmentFile=/etc/certmgr/certmgr.env
+ExecStart=/opt/certmgr/backend/.venv/bin/python -m cli.certmgr verify-backups
+StandardOutput=append:/var/log/certmgr/backup-verify.log
+StandardError=append:/var/log/certmgr/backup-verify.log
+# Hardening
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/certmgr /var/log/certmgr

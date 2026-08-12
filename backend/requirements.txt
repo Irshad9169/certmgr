@@ -1,0 +1,49 @@
+# --- Core web framework ---
+fastapi==0.115.6
+uvicorn[standard]==0.32.1
+python-multipart==0.0.19
+email-validator==2.2.0
+
+# --- Data layer ---
+sqlalchemy==2.0.36
+psycopg[binary]==3.2.3
+PyMySQL==1.1.1
+alembic==1.14.0
+
+# --- Validation / settings ---
+pydantic==2.10.3
+pydantic-settings==2.6.1
+
+# --- Background jobs ---
+celery==5.4.0
+redis==5.2.0
+APScheduler==3.10.4
+
+# --- Security / crypto ---
+cryptography==44.0.0
+PyJWT==2.10.1
+bcrypt==4.2.1
+pyotp==2.9.0
+slowapi==0.1.9
+
+# --- Remote execution / deployment ---
+paramiko==3.5.0
+
+# --- HTTP client (webhooks, OIDC, Slack/Teams) ---
+httpx==0.28.1
+
+# --- Reports ---
+openpyxl==3.1.5
+reportlab==4.2.5
+
+# --- Templating (deployment scripts) ---
+jinja2==3.1.4
+
+# --- Observability ---
+prometheus-client==0.21.1
+
+# --- Optional enterprise integrations (guarded imports) ---
+hvac==2.3.0
+
+# --- CLI ---
+typer==0.15.1

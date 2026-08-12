@@ -1,0 +1,156 @@
+import { useState } from 'react'
+import { useMutation, useQueryClient } from '@tanstack/react-query'
+import { useNavigate } from 'react-router-dom'
+import {
+  Alert,
+  Box,
+  Button,
+  Card,
+  CardContent,
+  FormControl,
+  FormControlLabel,
+  InputLabel,
+  MenuItem,
+  Select,
+  Switch,
+  TextField,
+  Typography,
+} from '@mui/material'
+import CloudUploadIcon from '@mui/icons-material/CloudUpload'
+import { api, apiErrorMessage } from '../lib/api'
+import { PageHeader, Toast } from '../components/Shared'
+import { useAuth } from '../lib/auth-context'
+
+export default function ImportPage() {
+  const { can } = useAuth()
+  const navigate = useNavigate()
+  const qc = useQueryClient()
+  const [files, setFiles] = useState<{ certificate?: File; private_key?: File; chain?: File; pfx?: File }>({})
+  const [pfxPassword, setPfxPassword] = useState('')
+  const [environment, setEnvironment] = useState('production')
+  const [autoRenew, setAutoRenew] = useState(false)
+  const [tags, setTags] = useState('')
+  const [toast, setToast] = useState<{ message: string; severity: 'success' | 'error' } | null>(null)
+
+  const mutation = useMutation({
+    mutationFn: async () => {
+      const form = new FormData()
+      if (files.pfx) {
+        form.append('pfx', files.pfx)
+      } else {
+        if (files.certificate) form.append('certificate', files.certificate)
+        if (files.private_key) form.append('private_key', files.private_key)
+        if (files.chain) form.append('chain', files.chain)
+      }
+      return api.post('/certificates/import/upload', form, {
+        params: {
+          environment,
+          auto_renew: autoRenew,
+          tags: tags || undefined,
+          pfx_password: pfxPassword || undefined,
+        },
+        headers: { 'Content-Type': 'multipart/form-data' },
+      })
+    },
+    onSuccess: (res) => {
+      const { certificate_id, domain } = res.data as { certificate_id: number; domain: string; fingerprint: string }
+      setToast({ message: `Imported ${domain} (#${certificate_id})`, severity: 'success' })
+      qc.invalidateQueries({ queryKey: ['certificates'] })
+      setTimeout(() => navigate(`/certificates/${certificate_id}`), 1200)
+    },
+    onError: (e) => setToast({ message: apiErrorMessage(e), severity: 'error' }),
+  })
+
+  const setFile = (key: keyof typeof files, f?: File) => setFiles((prev) => ({ ...prev, [key]: f }))
+
+  const canSubmit = Boolean(files.pfx || files.certificate) && can('certificate:import')
+
+  return (
+    <Box>
+      <PageHeader
+        title="Import certificate"
+        subtitle="Upload existing certificate material — metadata is detected automatically; private keys are encrypted at rest"
+      />
+
+      <Card sx={{ maxWidth: 720 }}>
+        <CardContent>
+          {!can('certificate:import') && (
+            <Alert severity="warning" sx={{ mb: 2 }}>
+              Your role does not allow importing certificates.
+            </Alert>
+          )}
+
+          <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+            <div>
+              <Typography variant="subtitle2" gutterBottom>Option A — PFX / PKCS12 bundle</Typography>
+              <Button variant="outlined" component="label" startIcon={<CloudUploadIcon />} fullWidth>
+                {files.pfx ? files.pfx.name : 'Choose .pfx / .p12 file'}
+                <input type="file" hidden accept=".pfx,.p12" onChange={(e) => setFile('pfx', e.target.files?.[0])} />
+              </Button>
+              {files.pfx && (
+                <TextField
+                  label="PFX password"
+                  type="password"
+                  fullWidth
+                  sx={{ mt: 1 }}
+                  value={pfxPassword}
+                  onChange={(e) => setPfxPassword(e.target.value)}
+                />
+              )}
+            </div>
+
+            <div>
+              <Typography variant="subtitle2" gutterBottom>Option B — PEM / CRT / CER components</Typography>
+              <Box sx={{ display: 'grid', gap: 1, gridTemplateColumns: { xs: '1fr', md: 'repeat(3, 1fr)' } }}>
+                <Button variant="outlined" component="label" startIcon={<CloudUploadIcon />}>
+                  {files.certificate ? files.certificate.name : 'Certificate *'}
+                  <input type="file" hidden accept=".pem,.crt,.cer,.cert" onChange={(e) => setFile('certificate', e.target.files?.[0])} />
+                </Button>
+                <Button variant="outlined" component="label" startIcon={<CloudUploadIcon />}>
+                  {files.private_key ? files.private_key.name : 'Private key'}
+                  <input type="file" hidden accept=".pem,.key" onChange={(e) => setFile('private_key', e.target.files?.[0])} />
+                </Button>
+                <Button variant="outlined" component="label" startIcon={<CloudUploadIcon />}>
+                  {files.chain ? files.chain.name : 'Chain'}
+                  <input type="file" hidden accept=".pem,.crt" onChange={(e) => setFile('chain', e.target.files?.[0])} />
+                </Button>
+              </Box>
+            </div>
+
+            <Box sx={{ display: 'grid', gap: 2, gridTemplateColumns: { xs: '1fr', md: '1fr 1fr' } }}>
+              <FormControl fullWidth>
+                <InputLabel>Environment</InputLabel>
+                <Select value={environment} label="Environment" onChange={(e) => setEnvironment(e.target.value)}>
+                  {['production', 'development', 'testing', 'staging', 'dr'].map((s) => (
+                    <MenuItem key={s} value={s}>{s}</MenuItem>
+                  ))}
+                </Select>
+              </FormControl>
+              <TextField label="Tags (comma separated)" value={tags} onChange={(e) => setTags(e.target.value)} />
+            </Box>
+
+            <FormControlLabel
+              control={<Switch checked={autoRenew} onChange={(e) => setAutoRenew(e.target.checked)} />}
+              label="Enable automatic renewal (best-effort for imported certificates)"
+            />
+
+            <Button
+              variant="contained"
+              size="large"
+              disabled={!canSubmit || mutation.isPending}
+              onClick={() => mutation.mutate()}
+            >
+              {mutation.isPending ? 'Importing…' : 'Import certificate'}
+            </Button>
+
+            <Alert severity="info" sx={{ fontSize: 12 }}>
+              The platform detects issuer, subject, SANs, fingerprint, algorithm and key size automatically.
+              Private keys are Fernet-encrypted at rest — never stored in the database. Duplicates are rejected.
+            </Alert>
+          </Box>
+        </CardContent>
+      </Card>
+      <Toast toast={toast} onClose={() => setToast(null)} />
+    </Box>
+  )
+}

@@ -1,0 +1,27 @@
+[Unit]
+Description=CertMgr API (FastAPI/uvicorn)
+After=network-online.target postgresql.service redis.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=certmgr
+Group=certmgr
+WorkingDirectory=/opt/certmgr/backend
+EnvironmentFile=/etc/certmgr/certmgr.env
+ExecStartPre=/opt/certmgr/backend/.venv/bin/alembic upgrade head
+ExecStart=/opt/certmgr/backend/.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000 --workers 4 --proxy-headers
+Restart=on-failure
+RestartSec=5
+# Hardening
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/certmgr /var/log/certmgr /etc/letsencrypt
+AmbientCapabilities=
+CapabilityBoundingSet=
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target

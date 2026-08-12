@@ -1,0 +1,20 @@
+[Unit]
+Description=CertMgr daily backup (certificate material + database dump + retention cleanup)
+After=network-online.target postgresql-16.service mariadb.service redis.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=certmgr
+Group=certmgr
+WorkingDirectory=/opt/certmgr/backend
+EnvironmentFile=/etc/certmgr/certmgr.env
+ExecStart=/opt/certmgr/backend/.venv/bin/python -m cli.certmgr backup
+StandardOutput=append:/var/log/certmgr/backup.log
+StandardError=append:/var/log/certmgr/backup.log
+# Hardening
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/certmgr /var/log/certmgr /etc/letsencrypt

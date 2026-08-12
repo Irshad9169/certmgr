@@ -1,0 +1,22 @@
+[Unit]
+Description=CertMgr Celery beat scheduler
+After=network-online.target redis.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=certmgr
+Group=certmgr
+WorkingDirectory=/opt/certmgr/backend
+EnvironmentFile=/etc/certmgr/certmgr.env
+ExecStart=/opt/certmgr/backend/.venv/bin/celery -A app.tasks.celery_app:celery_app beat --loglevel=INFO
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/certmgr /var/log/certmgr
+
+[Install]
+WantedBy=multi-user.target

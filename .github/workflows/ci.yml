@@ -1,0 +1,169 @@
+name: CI
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+
+env:
+  PYTHON_VERSION: "3.13"
+  NODE_VERSION: "20"
+
+jobs:
+  backend-lint:
+    name: Backend lint (ruff + bandit)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+      - run: pip install ruff bandit
+      - run: ruff check app/ --output-format=github
+      - run: bandit -r app/ -x app/tests -ll
+
+  backend-tests:
+    name: Backend tests (pytest, py${{ matrix.python }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.11", "3.13"]
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: certmgr
+          POSTGRES_PASSWORD: certmgr
+          POSTGRES_DB: certmgr
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U certmgr"
+          --health-interval 5s --health-timeout 3s --health-retries 12
+      redis:
+        image: redis:7-alpine
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s --health-timeout 3s --health-retries 12
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+      - name: Install dependencies
+        run: |
+          pip install -r requirements-dev.txt
+          sudo apt-get update && sudo apt-get install -y openssl
+      - name: Run unit + integration tests
+        env:
+          CERTMGR_DATABASE_URL: postgresql+psycopg://certmgr:certmgr@localhost:5432/certmgr
+          CERTMGR_REDIS_URL: redis://localhost:6379/0
+          CERTMGR_SECRETS_MASTER_KEY: ci-master-key-0123456789abcdef-0123456789
+        run: |
+          alembic upgrade head
+          pytest --cov=app --cov-report=term-missing -q
+      - name: Validate docker compose
+        run: docker compose -f ../docker-compose.yml config -q
+
+  backend-tests-mariadb:
+    name: Backend tests (MariaDB fallback)
+    runs-on: ubuntu-latest
+    services:
+      mariadb:
+        image: mariadb:11
+        env:
+          MARIADB_DATABASE: certmgr
+          MARIADB_USER: certmgr
+          MARIADB_PASSWORD: certmgr
+          MARIADB_ROOT_PASSWORD: root
+        ports: ["3306:3306"]
+        options: >-
+          --health-cmd "healthcheck.sh --connect --innodb_initialized"
+          --health-interval 5s --health-timeout 3s --health-retries 12
+      redis:
+        image: redis:7-alpine
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s --health-timeout 3s --health-retries 12
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+      - name: Install dependencies
+        run: |
+          pip install -r requirements-dev.txt
+          sudo apt-get update && sudo apt-get install -y mariadb-client
+      - name: Run unit + integration tests against MariaDB
+        env:
+          CERTMGR_DATABASE_URL: mysql+pymysql://certmgr:certmgr@127.0.0.1:3306/certmgr
+          CERTMGR_REDIS_URL: redis://localhost:6379/0
+          CERTMGR_SECRETS_MASTER_KEY: ci-master-key-0123456789abcdef-0123456789
+        run: |
+          mysql -h 127.0.0.1 -ucertmgr -pcertmgr -e "SELECT VERSION();"
+          pytest -q
+
+  frontend-build:
+    name: Frontend build
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+      - run: npm run build
+      - run: npm run lint
+
+  build-images:
+    name: Build Docker images
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@v6
+        with:
+          context: ./backend
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository }}/certmgr-api:${{ github.sha }}
+            ghcr.io/${{ github.repository }}/certmgr-api:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: Security scan (Trivy)
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ghcr.io/${{ github.repository }}/certmgr-api:${{ github.sha }}
+          format: sarif
+          output: trivy-results.sarif
+          severity: HIGH,CRITICAL
+      - uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy-results.sarif
+          if: always()

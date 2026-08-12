@@ -1,0 +1,192 @@
+"""Certificate service: import (PEM/PFX), metadata extraction, key-at-rest
+encryption, issuance with a mocked provider."""
+
+from __future__ import annotations
+
+import os
+
+import pytest
+from conftest import _build_pfx, _generate_self_signed  # noqa: F401
+
+from app.core.exceptions import ConflictError, ValidationAppError
+from app.services import storage
+from app.services.certificate_service import (
+    export_bundle,
+    import_certificate,
+    issue_certificate,
+    list_certificates,
+    revoke_certificate,
+)
+from app.services.providers.base import IssueResult
+
+
+def test_import_pem_certificate(db, sample_certificate):
+    cert = import_certificate(
+        db, cert_data=sample_certificate["cert_pem"], key_data=sample_certificate["key_pem"],
+    )
+    assert cert.domain == "example.com"
+    assert "www.example.com" in cert.sans
+    assert cert.fingerprint_sha256
+    assert cert.issuer
+    assert cert.key_type == "rsa"
+    assert cert.key_size == 2048
+    assert cert.imported is True
+    assert cert.valid_until is not None
+    # Private key content must NOT be in the DB
+    assert "PRIVATE KEY" not in repr(cert.__dict__)
+    assert cert.key_path and os.path.exists(cert.key_path)
+
+
+def test_import_detects_duplicate(db, sample_certificate):
+    import_certificate(db, cert_data=sample_certificate["cert_pem"],
+                       key_data=sample_certificate["key_pem"])
+    with pytest.raises(ConflictError):
+        import_certificate(db, cert_data=sample_certificate["cert_pem"],
+                           key_data=sample_certificate["key_pem"])
+
+
+def test_import_key_mismatch_rejected(db, sample_certificate):
+    _, other_key, _ = _generate_self_signed(["other.example.com"])
+    with pytest.raises(ValidationAppError):
+        import_certificate(db, cert_data=sample_certificate["cert_pem"], key_data=other_key)
+
+
+def test_import_invalid_data_rejected(db):
+    with pytest.raises(ValidationAppError):
+        import_certificate(db, cert_data=b"this is not a certificate")
+
+
+def test_import_pfx(db, sample_pfx):
+    cert = import_certificate(db, pfx_data=sample_pfx, pfx_password="testpass")
+    assert cert.domain == "pfx.example.com"
+    assert cert.key_path  # key extracted from PFX and stored encrypted
+
+
+def test_import_pfx_wrong_password(db, sample_pfx):
+    with pytest.raises(ValidationAppError):
+        import_certificate(db, pfx_data=sample_pfx, pfx_password="wrongpass")
+
+
+def test_private_key_encrypted_at_rest(db, sample_certificate):
+    cert = import_certificate(db, cert_data=sample_certificate["cert_pem"],
+                              key_data=sample_certificate["key_pem"])
+    raw = open(cert.key_path, encoding="utf-8").read()
+    assert "BEGIN PRIVATE KEY" not in raw  # encrypted blob, not PEM
+    store = storage.get_file_store()
+    decrypted = store.read_private_key(cert.key_path)
+    assert "BEGIN PRIVATE KEY" in decrypted
+
+
+def test_export_pem_and_zip(db, sample_certificate):
+    cert = import_certificate(db, cert_data=sample_certificate["cert_pem"],
+                              key_data=sample_certificate["key_pem"])
+    pem = export_bundle(db, cert.id, format="pem")
+    assert pem.startswith(b"-----BEGIN CERTIFICATE-----")
+    zip_data = export_bundle(db, cert.id, format="zip", include_key=True)
+    import io
+    import zipfile
+
+    zf = zipfile.ZipFile(io.BytesIO(zip_data))
+    assert "cert.pem" in zf.namelist()
+    assert "privkey.pem" in zf.namelist()
+
+
+def test_export_pfx(db, sample_certificate):
+    cert = import_certificate(db, cert_data=sample_certificate["cert_pem"],
+                              key_data=sample_certificate["key_pem"])
+    pfx = export_bundle(db, cert.id, format="pfx", include_key=True, password="x")
+    assert pfx.startswith(b"0")  # ASN.1 DER
+
+
+def test_list_certificates_search_and_filter(db, sample_certificate):
+    import_certificate(db, cert_data=sample_certificate["cert_pem"],
+                       key_data=sample_certificate["key_pem"])
+    rows, total, summary = list_certificates(db, search="example.com")
+    assert total == 1
+    rows, total, _ = list_certificates(db, filters={"status": "active"})
+    assert total == 1
+    rows, total, _ = list_certificates(db, filters={"status": "revoked"})
+    assert total == 0
+
+
+def test_issue_with_mocked_provider(db, admin_user, monkeypatch, tmp_path):
+    """Issue through the service with a fake provider returning real files."""
+    from app.services.providers.letsencrypt import LetsEncryptProvider
+
+    cert_obj, cert_pem, key_pem = _generate_self_signed(["issued.example.com"])
+    cert_file = tmp_path / "cert.pem"
+    key_file = tmp_path / "key.pem"
+    cert_file.write_bytes(cert_pem)
+    key_file.write_bytes(key_pem)
+
+    def fake_issue(self, request):
+        return IssueResult(
+            success=True, cert_path=str(cert_file), key_path=str(key_file),
+            cert_name="issued.example.com", exit_code=0, stdout="issued", stderr="",
+        )
+
+    monkeypatch.setattr(LetsEncryptProvider, "issue", fake_issue)
+
+    cert = issue_certificate(
+        db, payload={
+            "domains": ["issued.example.com"],
+            "validation_method": "http-01",
+            "key_type": "rsa2048",
+            "environment": "production",
+            "email": "ops@corp.com",
+        },
+        user=admin_user,
+    )
+    assert cert.status == "active"
+    assert cert.fingerprint_sha256
+    assert cert.cert_path and os.path.exists(cert.cert_path)
+    assert cert.key_path and os.path.exists(cert.key_path)
+    # executions recorded
+    from app.models.job import JobExecution
+
+    executions = db.query(JobExecution).filter(JobExecution.certificate_id == cert.id).all()
+    assert executions and executions[0].status == "success"
+
+
+def test_issue_failure_records_execution(db, admin_user, monkeypatch, tmp_path):
+    from app.services.providers.letsencrypt import LetsEncryptProvider
+
+    def fake_issue(self, request):
+        return IssueResult(success=False, exit_code=1, stderr="DNS problem: NXDOMAIN")
+
+    monkeypatch.setattr(LetsEncryptProvider, "issue", fake_issue)
+    cert = issue_certificate(
+        db, payload={"domains": ["bad.example.com"], "validation_method": "dns-01",
+                     "key_type": "rsa2048", "email": "ops@corp.com"},
+        user=admin_user,
+    )
+    assert cert.status == "failed"
+    assert "NXDOMAIN" in (cert.renewal_error or "")
+
+
+def test_revoke_flow(db, admin_user, monkeypatch, tmp_path):
+    from app.services.providers.letsencrypt import LetsEncryptProvider
+
+    cert_obj, cert_pem, key_pem = _generate_self_signed(["rv.example.com"])
+    cert_file = tmp_path / "cert.pem"
+    cert_file.write_bytes(cert_pem)
+
+    def fake_issue(self, request):
+        return IssueResult(success=True, cert_path=str(cert_file), cert_name="rv.example.com",
+                           exit_code=0, stdout="", stderr="")
+
+    def fake_revoke(self, cert_path, *, reason="unspecified"):
+        from app.services.providers.base import RevokeResult
+
+        return RevokeResult(success=True, stdout="revoked")
+
+    monkeypatch.setattr(LetsEncryptProvider, "issue", fake_issue)
+    monkeypatch.setattr(LetsEncryptProvider, "revoke", fake_revoke)
+
+    cert = issue_certificate(db, payload={"domains": ["rv.example.com"],
+                                          "validation_method": "http-01",
+                                          "key_type": "rsa2048", "email": "ops@corp.com"},
+                             user=admin_user)
+    execution = revoke_certificate(db, cert.id, user=admin_user)
+    assert execution.status == "success"
+    assert cert.status == "revoked"
