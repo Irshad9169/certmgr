@@ -153,6 +153,7 @@ password. It is idempotent and preserves existing secrets/DB.
 cd backend
 python3 -m venv .venv && source .venv/bin/activate   # Python 3.11 – 3.13
 pip install -r requirements-dev.txt
+pip install -e .               # installs the `certmgr` CLI entry point (pyproject.toml)
 cp .env.example .env           # point DATABASE_URL at sqlite, mysql or postgres
 alembic upgrade head
 uvicorn app.main:app --reload --port 8000

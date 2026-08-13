@@ -36,6 +36,7 @@ COPY app ./app
 COPY cli ./cli
 COPY alembic ./alembic
 COPY alembic.ini pyproject.toml ./
+RUN pip install --no-cache-dir --no-deps -e .   # registers the `certmgr` CLI entry point
 
 # Non-root runtime user
 RUN useradd --system --create-home --shell /usr/sbin/nologin certmgr \

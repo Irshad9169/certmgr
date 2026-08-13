@@ -133,6 +133,7 @@ sudo mkdir -p /etc/certmgr /var/lib/certmgr/{certificates,backups,tmp} /var/log/
 cd /opt/certmgr/backend
 python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
+pip install -e .               # installs the `certmgr` CLI entry point (pyproject.toml)
 cp .env.example /etc/certmgr/certmgr.env     # fill values
 sudo cp ../deploy/systemd/certmgr-*.service /etc/systemd/system/
 sudo systemctl daemon-reload
@@ -150,7 +151,7 @@ sudo systemctl enable --now certmgr-api certmgr-worker certmgr-beat
 # Docker: git pull && docker compose up -d --build
 # Bare metal: extract the new bundle, rebuild venv, restart:
 sudo /bin/sh -c 'cd /opt/certmgr && tar -xzf ~/certmgr-deploy.tar.gz'
-sudo /bin/sh -c 'cd /opt/certmgr/backend && rm -rf .venv && python3 -m venv .venv && .venv/bin/pip install -q -r requirements.txt'
+sudo /bin/sh -c 'cd /opt/certmgr/backend && rm -rf .venv && python3 -m venv .venv && .venv/bin/pip install -q -r requirements.txt && .venv/bin/pip install -q -e .'
 sudo /bin/sh -c 'chown -R secauto:secauto /opt/certmgr && systemctl restart certmgr-api certmgr-worker certmgr-beat'
 ```
 
@@ -504,7 +505,8 @@ one. Rotation is an offline procedure — plan for it.
 | `CSRF token missing or invalid` at login | Old JS bundle → hard refresh (Ctrl+Shift+R). Auth endpoints are CSRF-exempt in current versions; the UI self-heals on stale cookies. |
 | **502 Bad Gateway** through nginx | API down. Check `systemctl status certmgr-api`, `journalctl -u certmgr-api -n 50`, and `curl http://127.0.0.1:8000/health/ready`. |
 | `Address already in use` on :8000 | Stale uvicorn from a previous install. `pkill -f "uvicorn app.main"` then `systemctl restart certmgr-api`. |
-| systemd `status=203/EXEC` on ExecStartPre | Broken venv (alembic launcher can't exec). Rebuild: `rm -rf .venv && python3 -m venv .venv && .venv/bin/pip install -r requirements.txt`. |
+| systemd `status=203/EXEC` on ExecStartPre | Broken venv (alembic launcher can't exec). Rebuild: `rm -rf .venv && python3 -m venv .venv && .venv/bin/pip install -r requirements.txt && .venv/bin/pip install -e .`. |
+| `certmgr: command not found` in `.venv/bin/` | `pip install -r requirements.txt` only installs dependencies — it doesn't install the local package, so the `certmgr` console-script entry point (`pyproject.toml`'s `[project.scripts]`) is never created. Run `.venv/bin/pip install -e .`, or invoke `.venv/bin/python -m cli.certmgr ...` directly without installing anything. |
 | `error parsing value for field "cors_origins"` when sourcing env | bash `source` strips quotes. Current versions parse both forms; re-extract the bundle for the fix. |
 | `useradd: cannot create directory /home/certmgr` | `/home` on NFS. Create user with `-M -d /var/lib/certmgr`. |
 | `Command not found` after `VAR=x cmd` | Some shells reject inline env. Use `sudo /bin/sh -c 'VAR=x cmd'` or `export VAR=x`. |

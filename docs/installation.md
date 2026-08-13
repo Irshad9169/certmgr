@@ -93,6 +93,7 @@ cd /opt/certmgr && git clone <repo> .
 cd backend
 python3 -m venv .venv && source .venv/bin/activate   # any Python 3.11–3.13
 pip install -r requirements.txt
+pip install -e .               # installs the `certmgr` CLI entry point (pyproject.toml)
 cp .env.example /etc/certmgr/certmgr.env   # fill values; env file format
 sudo cp ../deploy/systemd/certmgr-*.service /etc/systemd/system/
 sudo systemctl daemon-reload

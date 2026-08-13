@@ -240,9 +240,13 @@ chown -R "$APP_USER":"$APP_USER" "$APP_DIR" 2>/dev/null || true
 cd "$APP_DIR/backend"
 if [[ ! -d .venv ]]; then
   "$PYTHON_BIN" -m venv .venv
-  ./.venv/bin/pip install -q --upgrade pip
-  ./.venv/bin/pip install -q -r requirements.txt
 fi
+# Re-run on every invocation (not just first-time venv creation) so a re-run
+# of this script after a `git pull` actually picks up dependency/version
+# changes, matching the "idempotent — safe to re-run" claim above.
+./.venv/bin/pip install -q --upgrade pip
+./.venv/bin/pip install -q -r requirements.txt
+./.venv/bin/pip install -q -e .   # installs the `certmgr` CLI entry point
 ok "python venv (from $PYTHON_BIN) + dependencies ready"
 
 # Environment file (idempotent — keeps existing secrets)
