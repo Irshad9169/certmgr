@@ -31,7 +31,10 @@ from app.core.database import SessionLocal, engine
 from app.main import create_app
 from app.models.base import Base
 
-TEST_ADMIN_PASSWORD = _TEST_MASTER_KEY
+# The bootstrap admin's real password is now a random one-time value (see
+# get_or_create_bootstrap_admin) rather than the master key, so tests set a
+# known password directly on the seeded admin row — see _seed_base below.
+TEST_ADMIN_PASSWORD = "Str0ng!TestAdmin9"
 
 # Create schema on the shared in-memory engine (production uses Alembic).
 Base.metadata.create_all(engine)
@@ -72,9 +75,11 @@ def _seed_base() -> None:
     try:
         seed_default_roles(db)
         seed_defaults(db)
+        from app.core.security import hash_password
         from app.services.auth_service import get_or_create_bootstrap_admin
 
         admin = get_or_create_bootstrap_admin(db)
+        admin.hashed_password = hash_password(TEST_ADMIN_PASSWORD)
         admin.must_change_password = False  # tests: allow immediate API use
         db.commit()
     finally:

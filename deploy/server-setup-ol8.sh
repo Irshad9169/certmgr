@@ -408,7 +408,6 @@ else
   echo "    journalctl -u certmgr-api -n 50"
 fi
 
-MASTER_KEY="$(grep CERTMGR_SECRETS_MASTER_KEY "$ENV_FILE" | cut -d= -f2)"
 echo ""
 echo "════════════════════════════════════════════════════════════════════"
 echo "  CertMgr deployed on Oracle Linux 8 (DB: ${DB_LABEL:-$DB_ENGINE})"
@@ -417,7 +416,9 @@ echo "  API docs:  https://$DOMAIN/api/docs"
 echo "  Health:    https://$DOMAIN/health/ready"
 echo ""
 echo "  Bootstrap admin:  admin"
-echo "  Password:         $MASTER_KEY   (shown once — change on first login)"
+echo "  Password:         randomly generated on first API start — retrieve it via:"
+echo "                       journalctl -u certmgr-api | grep 'Bootstrap admin'"
+echo "                     (change it immediately on first login)"
 echo ""
 echo "  NEXT STEPS:"
 echo "   1. Point DNS  $DOMAIN → this server."

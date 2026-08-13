@@ -15,6 +15,20 @@ from app.core.logging import get_logger
 
 logger = get_logger(__name__)
 
+
+def _crontab_from_cron_string(cron_str: str, fallback: crontab) -> crontab:
+    """Parse a standard 5-field `minute hour day month day_of_week` string
+    (the same format app/core/scheduler.py:_build_trigger already parses for
+    the APScheduler path) into a Celery crontab. Falls back to `fallback` on
+    any parse error so a bad setting can't take beat down."""
+    try:
+        minute, hour, day, month, dow = cron_str.split()
+        return crontab(minute=minute, hour=hour, day_of_month=day, month_of_year=month, day_of_week=dow)
+    except Exception:  # noqa: BLE001
+        logger.error("Invalid cron expression %r — using default schedule", cron_str)
+        return fallback
+
+
 celery_app = Celery(
     "certmgr",
     broker=settings.celery_broker,
@@ -51,19 +65,19 @@ celery_app.conf.update(
 celery_app.conf.beat_schedule = {
     "daily-renewal-scan": {
         "task": "app.tasks.certificates.renew_due",
-        "schedule": crontab(hour=3, minute=0),  # CERTMGR_RENEWAL_CRON used by scheduler service
+        "schedule": _crontab_from_cron_string(settings.renewal_cron, crontab(hour=3, minute=0)),
     },
     "daily-discovery": {
         "task": "app.tasks.discovery.run_discovery",
-        "schedule": crontab(hour=2, minute=30),
+        "schedule": _crontab_from_cron_string(settings.discovery_cron, crontab(hour=2, minute=30)),
     },
     "hourly-health-scan": {
         "task": "app.tasks.maintenance.health_scan",
-        "schedule": crontab(hour="*/4", minute=0),
+        "schedule": _crontab_from_cron_string(settings.health_cron, crontab(hour="*/4", minute=0)),
     },
     "daily-backup": {
         "task": "app.tasks.maintenance.run_backup",
-        "schedule": crontab(hour=1, minute=0),
+        "schedule": _crontab_from_cron_string(settings.backup_cron, crontab(hour=1, minute=0)),
     },
     "daily-compliance-report": {
         "task": "app.tasks.maintenance.compliance_report",

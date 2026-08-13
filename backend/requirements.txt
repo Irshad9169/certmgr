@@ -12,7 +12,7 @@ alembic==1.14.0
 
 # --- Validation / settings ---
 pydantic==2.10.3
-pydantic-settings==2.6.1
+pydantic-settings==2.7.1
 
 # --- Background jobs ---
 celery==5.4.0
@@ -47,3 +47,4 @@ hvac==2.3.0
 
 # --- CLI ---
 typer==0.15.1
+click==8.1.8  # typer 0.15.x's rich help renderer breaks on click>=8.2 (Parameter.make_metavar signature change)

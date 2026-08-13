@@ -1,15 +1,15 @@
 # CertMgr — Enterprise SSL Certificate Lifecycle Management Platform
 
-**CertMgr** is a production-grade, self-hosted platform for issuing, renewing, revoking,
-importing, deploying, monitoring and auditing SSL/TLS certificates at enterprise scale —
-thousands of certificates across hundreds of Linux servers.
+**CertMgr** is a production-grade, self-hosted platform for issuing, renewing,
+revoking, importing, deploying, monitoring and auditing SSL/TLS certificates at
+enterprise scale — thousands of certificates across hundreds of Linux servers.
 
-It is **not** a simple Certbot frontend. It is a full certificate lifecycle management
-platform with a plugin-based provider architecture (Let's Encrypt today; DigiCert,
-GoDaddy, Sectigo, GlobalSign, Entrust, MS ADCS and internal PKI plug in without core
-changes), a remote deployment engine, automatic discovery, compliance, reporting,
-RBAC, audit, notifications, webhooks, background job processing and an AI-assisted
-troubleshooter.
+It is **not** a simple Certbot frontend. It is a complete certificate lifecycle
+management platform with a plugin-based provider architecture (Let's Encrypt
+today; DigiCert, GoDaddy, Sectigo, GlobalSign, Entrust, MS ADCS and internal PKI
+plug in without core changes), a remote deployment engine, automatic discovery,
+compliance, reporting, RBAC, audit, notifications, webhooks, background job
+processing and an AI-assisted troubleshooter.
 
 ---
 
@@ -31,10 +31,12 @@ troubleshooter.
 | **Notifications** | SMTP, Slack, Microsoft Teams, generic signed webhooks; thresholds 60/30/15/7/3/1 days + lifecycle events |
 | **RBAC** | 4 roles × granular permission codes; JWT + refresh tokens + API tokens + TOTP MFA |
 | **Audit** | Every action recorded with user, IP, browser, duration, result |
-| **Background jobs** | Celery workers + beat; issuance/renewal/deployment/notifications/discovery/health/compliance/backup |
+| **Background jobs** | Celery workers + beat; issuance/renewal/deployment/notifications/discovery/health/compliance/backup/retention |
+| **Backup & restore** | Daily backup (material + DB dump via `pg_dump`/`mysqldump`), weekly verification, `certmgr restore` |
+| **Data retention** | Configurable purge of execution/audit/notification history — bounded DB growth |
 | **Observability** | Prometheus metrics, Grafana dashboard, `/health/live`, `/health/ready`, structured JSON logs |
 | **REST API** | Full OpenAPI + Swagger UI (`/docs`), rate limiting, CSRF protection |
-| **CLI** | `certmgr issue|renew|revoke|deploy|import|verify|inventory|discover|status` |
+| **CLI** | `certmgr issue|renew|revoke|deploy|import|verify|inventory|discover|status|backup|restore|verify-backups|retention` |
 
 ---
 
@@ -50,9 +52,9 @@ troubleshooter.
                     └────────────┬─────────────┘
                                  │ /api/v1
                     ┌────────────▼─────────────┐        ┌──────────────────────────┐
-                    │  FastAPI (stateless)     │───────▶│  PostgreSQL (metadata)   │
-                    │  JWT / RBAC / audit      │        └──────────────────────────┘
-                    └──────┬───────────────┬───┘
+                    │  FastAPI (stateless)     │───────▶│  PostgreSQL / MariaDB    │
+                    │  JWT / RBAC / audit      │        │  (metadata only)         │
+                    └──────┬───────────────┬───┘        └──────────────────────────┘
                            │ enqueue       │ read/write
                     ┌──────▼──────┐  ┌─────▼───────────────┐
                     │ Redis       │  │ Encrypted file store│  private keys (Fernet)
@@ -70,29 +72,35 @@ troubleshooter.
 ```
 
 **Layers (Clean Architecture):**
-`api/` (HTTP) → `services/` (business logic, providers, engines) → `repositories` (SQLAlchemy models in `models/`) — schemas (`schemas/`) sit at the boundary; `tasks/` (Celery) and `cli/` are secondary entry-points into the same services. No business logic in routes.
+`api/` (HTTP) → `services/` (business logic, providers, engines) → models
+(SQLAlchemy) — schemas (`schemas/`) sit at the boundary; `tasks/` (Celery) and
+`cli/` are secondary entry-points into the same services. No business logic in
+routes.
 
 ```
 backend/
 ├── app/
-│   ├── api/            # FastAPI routers + deps (auth, RBAC, audit)
+│   ├── api/            # FastAPI routers + deps (auth, RBAC, audit, CSRF)
 │   ├── core/           # config, logging, database, security, middleware, scheduler
 │   ├── models/         # SQLAlchemy 2.0 models (30 tables)
 │   ├── schemas/        # Pydantic v2 contracts
 │   ├── services/       # certificate lifecycle, certbot, deployment, discovery,
-│   │   │               # health, compliance, notifications, webhooks, ai, reports…
+│   │   │               # health, compliance, notifications, webhooks, ai,
+│   │   │               # backups/restore/verify, retention…
 │   │   └── providers/  # plugin registry: letsencrypt, openssl-ca (+ future CAs)
 │   └── tasks/          # Celery workers + beat schedule
-├── alembic/            # migrations
+├── alembic/            # migrations (incl. MySQL/MariaDB MEDIUMTEXT)
 ├── cli/                # certmgr CLI (typer)
-├── tests/              # 110 unit + integration tests
+├── scripts/            # seed-demo (evaluation only, opt-in)
+├── tests/              # 130+ unit + integration + API tests
 ├── Dockerfile*         # api / worker / beat images
 └── requirements.txt
-frontend/               # React + TypeScript SPA (Phase 2)
+frontend/               # React + TypeScript SPA
 infra/                  # nginx, prometheus, grafana
-deploy/systemd/         # systemd units
-.github/workflows/      # CI + deploy
+deploy/                 # systemd units + server-setup-ol8.sh (bare metal)
+deploy/systemd/         # api/worker/beat + backup/verify/retention timers
 docs/                   # full documentation set
+.github/workflows/      # CI (Postgres + MariaDB + Py3.11/3.13) + deploy
 ```
 
 See [docs/architecture.md](docs/architecture.md) for the detailed architecture and
@@ -100,7 +108,9 @@ See [docs/architecture.md](docs/architecture.md) for the detailed architecture a
 
 ---
 
-## Quick start (Docker Compose)
+## Quick start
+
+### Option A — Docker Compose
 
 ```bash
 cp backend/.env.example .env
@@ -108,13 +118,34 @@ cp backend/.env.example .env
 docker compose up -d --build
 ```
 
-- UI: `https://localhost` (or `http://localhost`)
-- API docs: `http://localhost/api/docs`
-- Health: `http://localhost/health/ready`
-- Metrics: `http://localhost/metrics`
+### Option B — Bare metal (Oracle Linux 8 / RHEL 8) — recommended for this stack
 
-Bootstrap admin is created on first boot: username `admin`, password =
-`CERTMGR_SECRETS_MASTER_KEY` (change immediately — the UI forces it).
+```bash
+# Upload certmgr-deploy.tar.gz, then as root:
+tar -xzf certmgr-deploy.tar.gz && cd certmgr
+sudo bash deploy/server-setup-ol8.sh                                    # PostgreSQL 16
+sudo DB_ENGINE=mariadb bash deploy/server-setup-ol8.sh                  # installs MariaDB
+sudo DB_ENGINE=external-mariadb bash deploy/server-setup-ol8.sh         # reuse an EXISTING MariaDB
+sudo DB_ENGINE=external-mariadb MYSQL_ADMIN_PASSWORD='<admin-pw>' \
+     CERTMGR_DB_PASSWORD='<app-pw>' bash deploy/server-setup-ol8.sh     # fully automated
+sudo CERTMGR_DATABASE_URL='mysql+pymysql://certmgr:pw@host:3306/certmgr' \
+     bash deploy/server-setup-ol8.sh                                    # DB already prepared
+```
+
+Environment overrides: `APP_USER=secauto` (run services as that user),
+`CERTMGR_DOMAIN=certmgr.hyd.int.untd.com` (hostname for nginx/cert/CORS),
+`CERTMGR_EMAIL=...`, `PYTHON_BIN=/usr/bin/python3.11`.
+
+The script: installs/verifies prerequisites (epel, nginx, certbot, rsync),
+sets up the DB (installs PG16/MariaDB **or** connects to an existing MariaDB
+and creates the `certmgr` DB+user idempotently), ensures Redis + Python
+3.11–3.13 (uses an existing interpreter, only builds 3.13 from source if none
+exists), creates the service user + storage dirs + venv + deps, writes
+`/etc/certmgr/certmgr.env` with generated secrets, runs Alembic migrations,
+configures nginx (self-signed TLS) for your domain, installs systemd units
+(`api`/`worker`/`beat`) + daily backup / weekly backup-verify / daily retention
+timers, applies SELinux/firewall policy, and prints the bootstrap admin
+password. It is idempotent and preserves existing secrets/DB.
 
 ### Local development (no Docker)
 
@@ -122,7 +153,7 @@ Bootstrap admin is created on first boot: username `admin`, password =
 cd backend
 python3 -m venv .venv && source .venv/bin/activate   # Python 3.11 – 3.13
 pip install -r requirements-dev.txt
-cp .env.example .env           # point DATABASE_URL at sqlite or postgres
+cp .env.example .env           # point DATABASE_URL at sqlite, mysql or postgres
 alembic upgrade head
 uvicorn app.main:app --reload --port 8000
 # separate terminal (if using Redis for tasks):
@@ -132,10 +163,18 @@ celery -A app.tasks.celery_app:celery_app worker --loglevel=INFO
 > In development with `CERTMGR_CELERY_TASK_ALWAYS_EAGER=true`, operations run
 > synchronously inside the API process — no Redis/worker required.
 
+### First login
+
+- Bootstrap admin: username `admin`, with a randomly generated one-time
+  password logged once at startup — retrieve it from the API logs
+  (`docker compose logs api` or `journalctl -u certmgr-api`, search for
+  "Bootstrap admin").
+- **The UI forces a password change on first login** — change it immediately.
+
 ### CLI
 
 ```bash
-certmgr status                       # platform state
+certmgr status                       # platform state (DB type, providers, storage)
 certmgr issue -d example.com,www.example.com -m ops@corp.com -v dns-01 -k rsa4096
 certmgr inventory --status expiring --json
 certmgr renew -c 42 --force
@@ -144,7 +183,25 @@ certmgr deploy -c 42 -s 3 --service nginx
 certmgr import-cert --cert-path /tmp/cert.pem --key-path /tmp/key.pem
 certmgr verify -c 42
 certmgr discover --paths /etc/nginx,/custom/path
+certmgr backup                          # full backup + retention cleanup
+certmgr verify-backups                  # verify archives + DB dumps
+certmgr restore --backup <archive> [--cert <id>] [--dry-run]
+certmgr retention [--dry-run]           # purge old history
 ```
+
+---
+
+## Database support
+
+| Engine | Status | URL | Notes |
+|---|---|---|---|
+| **PostgreSQL 12+** | **Primary (tested in CI)** | `postgresql+psycopg://user:pass@host:5432/db` | JSONB, `NULLS LAST`, `pg_dump` backups |
+| **MariaDB 10.3+ / MySQL 8** | **Supported fallback** | `mysql+pymysql://user:pass@host:3306/db` | `pymysql`, dialect-safe SQL, `MEDIUMTEXT` log columns, `mysqldump` backups. 10.3 works; 10.5+ recommended (10.3 EOL) |
+| **SQLite** | Dev/tests only | `sqlite:///./certmgr-dev.db` | single-writer — not for production |
+
+Moving MariaDB → PostgreSQL later: see
+[docs/migration-mariadb-to-postgres.md](docs/migration-mariadb-to-postgres.md)
+(pgloader one-liner; keys live on disk so they're untouched).
 
 ---
 
@@ -153,55 +210,65 @@ certmgr discover --paths /etc/nginx,/custom/path
 - **No `shell=True` anywhere** — every command is `subprocess.run(argv_list)` with
   per-argument metacharacter validation (lint + tests enforce).
 - **Private keys encrypted at rest** (Fernet, master key from env/file/Vault) and
-  **never** written to PostgreSQL; DB credentials/secrets also encrypted.
+  **never** written to the database; DB credentials/secrets also encrypted.
 - **JWT** (access + refresh, rotation, revocation), **API tokens** (hashed at rest),
   **TOTP MFA**, account lockout, password policy.
-- **RBAC** with granular permission codes (`certificate:issue`, `certificate:download_key`, …).
-- **CSRF** double-submit cookie for cookie-authenticated flows; **rate limiting**
-  (Redis-backed); secure cookies (SameSite, Secure).
+- **RBAC** with granular permission codes (`certificate:issue`,
+  `certificate:download_key`, …).
+- **CSRF** double-submit cookie (public `GET /auth/csrf` establishes the token;
+  login and state-changing requests carry `X-CSRF-Token`; Bearer-authenticated
+  requests are exempt by design).
+- **Rate limiting** (Redis-backed); secure cookies (SameSite, Secure, HttpOnly).
 - **Remote command center** executes only an allowlist of maintenance commands.
-- **Log redaction** — private keys, passwords and tokens are stripped from every log.
+- **Log redaction** — private keys, passwords and tokens stripped from every log.
 - **Input validation** at the schema layer (domains, emails, paths, uploads, sizes).
 
 See [docs/security.md](docs/security.md).
 
 ---
 
+## Operations
+
+- **Backups** run daily (systemd `certmgr-backup.timer` or Celery beat): every
+  certificate's material (encrypted keys) + DB dump (`pg_dump`/`mysqldump`),
+  with retention cleanup. **Verify** weekly (`certmgr-backup-verify.timer`):
+  archive integrity, checksums, DB-dump readability. **Restore** per certificate
+  via `certmgr restore` or the admin API.
+- **Data retention** runs daily (`certmgr-retention.timer`): purges execution
+  history / audit / notifications older than
+  `CERTMGR_EXECUTION_RETENTION_DAYS` (365) / `CERTMGR_AUDIT_RETENTION_DAYS`
+  (730) / `CERTMGR_NOTIFICATION_RETENTION_DAYS` (365) — bounds DB growth
+  (~150–400 MB @ 1k certs, ~1–3 GB @ 5k certs, stable year over year).
+- **Maintenance mode** (Settings) pauses renewals/deployments/notifications/
+  imports/background jobs.
+- Details: [docs/administration.md](docs/administration.md).
+
+---
+
 ## Demo data (evaluation only)
 
-To verify the UI with realistic mock data before wiring real infrastructure:
-
 ```bash
-certmgr seed-demo --reset        # populates 10 certs, 6 servers, hooks,
-                                 # deployments, notifications, audit, users…
+certmgr seed-demo --reset        # 10 certs, 6 servers, hooks, deployments,
+                                 # notifications, audit, users (example.com namespace)
 ```
 
-- **Never runs automatically** — it is invoked explicitly and is intended for
-  evaluation only. The platform starts empty in production.
-- Seeds certificates (active/expiring/expired/revoked/failed, wildcard, internal
-  CA, weak-signature for compliance demo), servers, hooks (real executable demo
-  scripts under `backend/demo-hooks/`), deployment templates + history,
-  notifications (4 channels + history), webhook endpoints, audit entries,
-  discovery runs, scheduled jobs, backups, and 3 extra RBAC users.
-- Demo users: `ops1` (operator), `cm1` (certificate_manager),
-  `viewer1` (read_only) — password `Demo!Passw0rd2024`.
-- All rows are plain rows in the normal tables. To remove them for a real
-  deployment: `certmgr seed-demo --no-reset` keeps data; delete rows manually
-  or re-run the reset on a clean database. Demo rows use the `example.com`
-  namespace and carry "Demo data" notes for easy identification.
+Never runs automatically; the platform starts empty in production. Delete demo
+rows before going live (or use `--no-reset` to preserve real data).
+
+---
 
 ## Testing
 
 ```bash
 cd backend && source .venv/bin/activate
-pytest -q                 # 110 tests: unit, integration, API, RBAC, security
+pytest -q                 # 130+ tests: unit, integration, API, RBAC, security, CSRF, dialects
 ruff check app/           # lint
 bandit -r app/            # security scanner
 ```
 
-CI (`.github/workflows/ci.yml`): lint → tests against real PostgreSQL+Redis →
-docker build + Trivy vulnerability scan. End-to-end flows are documented in
-[docs/testing.md](docs/testing.md).
+CI (`.github/workflows/ci.yml`): lint → tests against real **PostgreSQL 16** and
+**MariaDB 11** on **Python 3.11 + 3.13** → docker build + Trivy vulnerability
+scan. E2E flows: [docs/testing.md](docs/testing.md).
 
 ---
 
@@ -209,9 +276,12 @@ docker build + Trivy vulnerability scan. End-to-end flows are documented in
 
 | Document | Purpose |
 |---|---|
-| [docs/architecture.md](docs/architecture.md) | System architecture, components, HA design, plugin framework |
-| [docs/installation.md](docs/installation.md) | Installation (Docker & bare-metal), configuration reference |
-| [docs/administration.md](docs/administration.md) | Admin guide: settings, roles, providers, maintenance, backups |
+| [document.md](document.md) | **Complete reference** — overview, features, installation, all configuration, CLI, API, operations runbook, troubleshooting, FAQ |
+| [architecture.md](architecture.md) | System architecture, components, data model, flows, security, HA, extensibility |
+| [changelog.md](changelog.md) | Release history and fixes |
+| [docs/installation.md](docs/installation.md) | Installation (Docker & bare-metal/OL8), configuration reference, DB matrix |
+| [docs/migration-mariadb-to-postgres.md](docs/migration-mariadb-to-postgres.md) | Move from MariaDB to PostgreSQL later |
+| [docs/administration.md](docs/administration.md) | Admin guide: settings, roles, providers, maintenance, backups/restore, retention |
 | [docs/user-guide.md](docs/user-guide.md) | Operator guide: wizard, inventory, import, deploy, discovery |
 | [docs/api.md](docs/api.md) | REST API overview + auth flows (full spec at `/docs`) |
 | [docs/database.md](docs/database.md) | ER diagram and table reference |
@@ -220,15 +290,6 @@ docker build + Trivy vulnerability scan. End-to-end flows are documented in
 | [docs/roadmap.md](docs/roadmap.md) | Delivery phases & future CA/SSO integrations |
 
 ---
-
-## Project status (phased delivery)
-
-- **Phase 1 — Backend (complete):** full API, lifecycle engine, providers, deployment,
-  discovery, notifications, RBAC, audit, Celery, reports, CLI, tests, Docker/CI/docs.
-- **Phase 2 — Frontend (next):** React + TypeScript SPA (wizard, dashboard, inventory,
-  details, servers, admin) with dark/light enterprise UI.
-- **Phase 3 — Enterprise extensions:** LDAP/OIDC/SAML SSO, Vault secrets, S3 storage,
-  CyberArk, additional CA plugins, e2e test suite.
 
 ## License
 

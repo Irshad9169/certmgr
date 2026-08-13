@@ -7,8 +7,9 @@ from fastapi import APIRouter, Query, Request
 from pydantic import BaseModel, Field
 
 from app.api.deps import CurrentUser, DbSession, get_client_ip, get_user_agent
+from app.api.permissions import P_, has_permission
 from app.core.config import settings
-from app.core.exceptions import NotFoundError
+from app.core.exceptions import NotFoundError, PermissionDeniedError
 from app.core.logging import get_logger
 from app.models.enums import AuditResult
 from app.services.audit_service import record
@@ -24,6 +25,8 @@ discovery_router = APIRouter(prefix="/discovery", tags=["Discovery"])
 @discovery_router.post("/run")
 def trigger_discovery(db: DbSession, user: CurrentUser, request: Request,
                       body: dict[str, Any] | None = None):
+    if not has_permission(user.role_name.value, P_["discovery"]["run"]):
+        raise PermissionDeniedError("You are not authorized to run discovery")
     from app.services.discovery_service import run_discovery
 
     if settings.celery_task_always_eager:
@@ -64,6 +67,8 @@ health_router = APIRouter(prefix="/health", tags=["Health"])
 
 @health_router.get("/certificate/{certificate_id}/scan")
 def scan_certificate(certificate_id: int, db: DbSession, user: CurrentUser, request: Request):
+    if not has_permission(user.role_name.value, P_["health"]["run"]):
+        raise PermissionDeniedError("You are not authorized to run health scans")
     from app.services.certificate_service import get_certificate
     from app.services.health_service import check_certificate_health
 
@@ -126,6 +131,8 @@ def compliance_dashboard(db: DbSession, user: CurrentUser):
 
 @compliance_router.post("/report")
 def generate_compliance(db: DbSession, user: CurrentUser, request: Request):
+    if not has_permission(user.role_name.value, P_["admin"]["reports"]):
+        raise PermissionDeniedError("You are not authorized to generate compliance reports")
     from app.services.compliance_service import run_compliance_report
 
     report = run_compliance_report(db, created_by=user.id)
@@ -148,6 +155,8 @@ def download_report(report_type: str, fmt: str, db: DbSession, user: CurrentUser
 
     from app.services.report_service import generate_report
 
+    if not has_permission(user.role_name.value, P_["admin"]["reports"]):
+        raise PermissionDeniedError("You are not authorized to download reports")
     ids = [int(x) for x in certificate_ids.split(",")] if certificate_ids else None
     if fmt not in ("csv", "xlsx", "pdf", "json"):
         from app.core.exceptions import ValidationAppError
@@ -248,8 +257,14 @@ def search(db: DbSession, user: CurrentUser, q: str = Query(min_length=2, max_le
 ai_router = APIRouter(prefix="/ai", tags=["AI Assistant"])
 
 
+def _require_ai_permission(user) -> None:
+    if not has_permission(user.role_name.value, P_["ai"]["use"]):
+        raise PermissionDeniedError("You are not authorized to use the AI assistant")
+
+
 @ai_router.get("/explain/{execution_id}")
 def explain_failure(execution_id: int, db: DbSession, user: CurrentUser):
+    _require_ai_permission(user)
     from app.services.ai_service import explain_failure
 
     return explain_failure(db, execution_id)
@@ -257,6 +272,7 @@ def explain_failure(execution_id: int, db: DbSession, user: CurrentUser):
 
 @ai_router.get("/troubleshoot/{execution_id}")
 def troubleshoot(execution_id: int, db: DbSession, user: CurrentUser):
+    _require_ai_permission(user)
     from app.services.ai_service import troubleshoot
 
     return troubleshoot(db, execution_id)
@@ -264,6 +280,7 @@ def troubleshoot(execution_id: int, db: DbSession, user: CurrentUser):
 
 @ai_router.get("/recurring-failures")
 def recurring_failures(db: DbSession, user: CurrentUser, days: int = Query(30, ge=1, le=365)):
+    _require_ai_permission(user)
     from app.services.ai_service import detect_recurring_failures
 
     return {"failures": detect_recurring_failures(db, days)}
@@ -271,6 +288,7 @@ def recurring_failures(db: DbSession, user: CurrentUser, days: int = Query(30, g
 
 @ai_router.get("/predict-renewal-failures")
 def predict_failures(db: DbSession, user: CurrentUser):
+    _require_ai_permission(user)
     from app.services.ai_service import predict_renewal_failures
 
     return {"at_risk": predict_renewal_failures(db)}
@@ -278,6 +296,7 @@ def predict_failures(db: DbSession, user: CurrentUser):
 
 @ai_router.get("/summarize/{certificate_id}")
 def summarize(certificate_id: int, db: DbSession, user: CurrentUser):
+    _require_ai_permission(user)
     from app.services.ai_service import summarize_renewal_logs
 
     return summarize_renewal_logs(db, certificate_id)

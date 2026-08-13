@@ -743,12 +743,31 @@ def _load_key(data: bytes, password: str | None):
     return parse_private_key(data, password.encode() if password else None)
 
 
+def _assert_importable_path(path: str) -> Path:
+    """Reject paths outside the admin-configured discovery scan roots.
+
+    import_from_paths lets an authenticated user point the server at an
+    arbitrary local file — without this jail it would be an arbitrary local
+    file read. Constrain it to the same trust boundary Discovery already
+    uses (`discovery.scan_paths` / DEFAULT_SCAN_PATHS), since those are the
+    directories an admin has explicitly designated as certificate locations.
+    """
+    from app.services.discovery_service import settings_scan_paths
+
+    resolved = Path(path).resolve()
+    for root in settings_scan_paths():
+        root_resolved = Path(root).resolve()
+        if resolved == root_resolved or root_resolved in resolved.parents:
+            return resolved
+    raise ValidationAppError(f"Path is not within an allowed certificate directory: {path}")
+
+
 def import_from_paths(db: Session, *, cert_path: str, key_path: str | None = None,
                       chain_path: str | None = None, payload: dict | None = None,
                       user: User | None = None) -> Certificate:
-    cert_data = Path(cert_path).read_bytes()
-    key_data = Path(key_path).read_bytes() if key_path else None
-    chain_data = Path(chain_path).read_bytes() if chain_path else None
+    cert_data = _assert_importable_path(cert_path).read_bytes()
+    key_data = _assert_importable_path(key_path).read_bytes() if key_path else None
+    chain_data = _assert_importable_path(chain_path).read_bytes() if chain_path else None
     return import_certificate(
         db, cert_data=cert_data, key_data=key_data, chain_data=chain_data,
         payload=payload, user=user,

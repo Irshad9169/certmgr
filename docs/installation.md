@@ -30,7 +30,9 @@ Migrations run automatically on API start (`alembic upgrade head`).
 
 ### First login
 
-- User: `admin` — Password: the value of `CERTMGR_SECRETS_MASTER_KEY`.
+- User: `admin` — Password: randomly generated on first API start and logged
+  once (`docker compose logs api` or `journalctl -u certmgr-api`, search for
+  "Bootstrap admin"). It is never derived from `CERTMGR_SECRETS_MASTER_KEY`.
 - The UI forces a password change on first login. **Change it immediately.**
 
 ### Rotating the master key

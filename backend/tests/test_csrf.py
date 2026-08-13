@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import pytest
+from conftest import TEST_ADMIN_PASSWORD
 from fastapi.testclient import TestClient
 
 from app.core.config import settings
@@ -66,7 +67,7 @@ def test_login_succeeds_with_valid_csrf(csrf_client):
         "/api/v1/auth/login",
         cookies=cookies,
         headers={"X-CSRF-Token": token},
-        json={"username": "admin", "password": settings.secrets_master_key},
+        json={"username": "admin", "password": TEST_ADMIN_PASSWORD},
     )
     assert resp.status_code == 200, resp.text
     assert resp.json()["access_token"]
@@ -80,7 +81,7 @@ def test_bearer_requests_are_csrf_exempt(csrf_client):
         "/api/v1/auth/login",
         cookies=cookies,
         headers={"X-CSRF-Token": token},
-        json={"username": "admin", "password": settings.secrets_master_key},
+        json={"username": "admin", "password": TEST_ADMIN_PASSWORD},
     )
     access = login.json()["access_token"]
     headers = {"Authorization": f"Bearer {access}"}
@@ -103,7 +104,7 @@ def test_login_does_not_rotate_csrf_cookie(csrf_client):
         "/api/v1/auth/login",
         cookies=cookies,
         headers={"X-CSRF-Token": token},
-        json={"username": "admin", "password": settings.secrets_master_key},
+        json={"username": "admin", "password": TEST_ADMIN_PASSWORD},
     )
     assert login.status_code == 200
     body = login.json()

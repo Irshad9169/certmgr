@@ -24,16 +24,28 @@ from app.services.ssh import SSHClient, SSHConfig, SSHConnectionError, build_ssh
 logger = get_logger(__name__)
 
 # ── Allowed maintenance commands (Remote Command Center) ───────────────────
+# SECURITY: every pattern MUST be fully anchored (^...$) with no unbounded
+# `.*`/`.+` — re.match() only pins the start of the string, so an unanchored
+# tail lets an attacker smuggle extra shell commands after a valid prefix
+# (e.g. "cat /etc/ssl/x; rm -rf /"). Every path segment below is a fixed
+# alternation and every command name is a strict character class — never a
+# wildcard — to keep the allowlist a true allowlist.
+_CERT_DIRS = r"(?:/etc/ssl|/etc/letsencrypt|/etc/pki|/etc/nginx|/etc/httpd|/etc/apache2|/etc/openvpn)"
+_SAFE_SUBPATH = r"(?:/[a-zA-Z0-9_./-]*)?"
+_SERVICE_NAME = r"[a-zA-Z0-9_.-]+"
+
 _ALLOWED_COMMAND_PATTERNS: list[tuple[str, str]] = [
-    ("view_cert_files", r"^(cat|ls -la|head -5|tail -5)\s+(/etc/ssl|/etc/letsencrypt|/etc/pki|/etc/nginx|/etc/httpd|/etc/apache2|/etc/openvpn)(?:/|$)"),
-    ("check_permissions", r"^ls -la\s+(/etc/ssl|/etc/letsencrypt|/etc/pki|/etc/nginx|/etc/httpd|/etc/apache2|/etc/openvpn)(?:/|$)"),
-    ("check_ownership", r"^stat -c .*"),
-    ("view_service_logs", r"^(journalctl -u|tail -n 200 /var/log/nginx|tail -n 200 /var/log/apache2)"),
-    ("service_status", r"^systemctl (is-active|status)\s+[a-zA-Z0-9_.-]+$"),
-    ("restart_service", r"^systemctl restart\s+[a-zA-Z0-9_.-]+$"),
-    ("reload_service", r"^systemctl reload\s+[a-zA-Z0-9_.-]+$"),
-    ("stop_service", r"^systemctl stop\s+[a-zA-Z0-9_.-]+$"),
-    ("start_service", r"^systemctl start\s+[a-zA-Z0-9_.-]+$"),
+    ("view_cert_files", rf"^(?:cat|ls -la|head -5|tail -5) {_CERT_DIRS}{_SAFE_SUBPATH}$"),
+    ("check_permissions", rf"^ls -la {_CERT_DIRS}{_SAFE_SUBPATH}$"),
+    ("check_ownership", rf"^stat -c %[a-zA-Z]+ {_CERT_DIRS}{_SAFE_SUBPATH}$"),
+    ("view_service_logs", rf"^journalctl -u {_SERVICE_NAME}$"),
+    ("view_nginx_logs", r"^tail -n 200 /var/log/nginx(?:/[a-zA-Z0-9_.-]+)?$"),
+    ("view_apache_logs", r"^tail -n 200 /var/log/apache2(?:/[a-zA-Z0-9_.-]+)?$"),
+    ("service_status", rf"^systemctl (?:is-active|status) {_SERVICE_NAME}$"),
+    ("restart_service", rf"^systemctl restart {_SERVICE_NAME}$"),
+    ("reload_service", rf"^systemctl reload {_SERVICE_NAME}$"),
+    ("stop_service", rf"^systemctl stop {_SERVICE_NAME}$"),
+    ("start_service", rf"^systemctl start {_SERVICE_NAME}$"),
     ("whoami", r"^whoami$"),
     ("uptime", r"^uptime$"),
     ("disk_space", r"^df -h$"),

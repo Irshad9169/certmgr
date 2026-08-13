@@ -20,7 +20,7 @@ import jinja2
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
-from app.core.exceptions import DeploymentError, NotFoundError
+from app.core.exceptions import DeploymentError, NotFoundError, ValidationAppError
 from app.core.logging import get_logger
 from app.core.timeutils import utcnow
 from app.models.enums import (
@@ -100,6 +100,16 @@ def create_deployment_record(
     db: Session, *, certificate_id: int, server_id: int, template_id: int | None,
     target_service: str | None, method: str, user=None,
 ) -> Deployment:
+    if target_service:
+        # SECURITY: target_service is caller-controlled and later rendered
+        # unescaped into a shell reload command (e.g. "systemctl reload
+        # {{ service }}") on the remote host — it must be restricted to the
+        # same service allowlist the Command Center's service_control() uses,
+        # never a free-form string.
+        from app.services.server_service import ALLOWED_SERVICE_NAMES
+
+        if target_service not in ALLOWED_SERVICE_NAMES:
+            raise ValidationAppError(f"target_service '{target_service}' is not in the allowed list")
     cert = get_certificate(db, certificate_id, load_relations=False)
     server = db.query(Server).filter(Server.id == server_id).first()
     if server is None:

@@ -57,6 +57,12 @@ def issue(
     auto_renew: bool = typer.Option(True, "--auto-renew/--no-auto-renew"),
     auth_hook: str | None = typer.Option(None, "--auth-hook"),
     cleanup_hook: str | None = typer.Option(None, "--cleanup-hook"),
+    webroot_path: str | None = typer.Option(
+        None, "--webroot-path", "-w", help="Required for -v webroot"
+    ),
+    standalone_port: int | None = typer.Option(
+        None, "--standalone-port", help="Port for -v standalone (default 80)"
+    ),
     wait: bool = typer.Option(True, "--wait/--no-wait", help="Execute synchronously"),
 ):
     """Issue a new certificate via the configured provider."""
@@ -67,6 +73,7 @@ def issue(
         "email": email, "validation_method": validation, "key_type": key_type,
         "environment": environment, "staging": staging, "dry_run": dry_run,
         "auto_renew": auto_renew, "auth_hook": auth_hook, "cleanup_hook": cleanup_hook,
+        "webroot_path": webroot_path, "standalone_port": standalone_port,
     }
     with _db() as db:
         cert = issue_certificate(db, payload=payload)

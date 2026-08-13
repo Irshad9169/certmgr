@@ -225,7 +225,7 @@ def create_user(db: Session, *, username: str, email: str | None, full_name: str
 
 
 def get_or_create_bootstrap_admin(db: Session) -> User:
-    """Idempotent bootstrap admin for first-run (env-configured credentials).
+    """Idempotent bootstrap admin for first-run (random one-time password, logged once).
 
     Concurrency-safe: if multiple workers race to create the admin on first
     boot, the loser rolls back and returns the winner's row.
@@ -238,7 +238,16 @@ def get_or_create_bootstrap_admin(db: Session) -> User:
     if admin:
         return admin
     role = db.query(Role).filter(Role.name == "administrator").first()
-    password = settings.secrets_master_key or "ChangeMe!Admin2024"
+    # SECURITY: never derive the login password from secrets_master_key (that
+    # key also encrypts every private key at rest — reusing it as a login
+    # credential means one leak compromises both) and never fall back to a
+    # fixed string (would be a publicly-known default in this source). Always
+    # generate a fresh random password, independent of any other secret.
+    password = secrets.token_urlsafe(24)
+    logger.warning(
+        "Bootstrap admin account created — one-time password: %s "
+        "(change it immediately on first login)", password,
+    )
     admin = User(
         username="admin",
         email=settings.default_letsencrypt_email,

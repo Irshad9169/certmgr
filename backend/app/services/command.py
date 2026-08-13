@@ -10,12 +10,16 @@ SECURITY CONTRACT:
 from __future__ import annotations
 
 import os
-import pwd
 import shutil
 import subprocess
 import time
 from dataclasses import dataclass
 from pathlib import Path
+
+try:
+    import pwd  # POSIX-only; production always runs on Linux (see deploy/, docs/)
+except ImportError:  # pragma: no cover — Windows dev/test environment only
+    pwd = None
 
 from app.core.exceptions import CommandError, ValidationAppError
 from app.core.logging import get_logger, redact
@@ -69,6 +73,8 @@ def assert_safe_script_path(path: str, *, executable_required: bool = False) -> 
 
 def _drop_privileges(target_user: str) -> None:
     """setuid/setgid to another user (only meaningful when running as root)."""
+    if pwd is None:
+        raise ValidationAppError("execution_user is not supported on this platform (POSIX-only)")
     if os.geteuid() != 0:
         logger.warning("Cannot run as %s (not root); continuing as current user", target_user)
         return
@@ -79,6 +85,30 @@ def _drop_privileges(target_user: str) -> None:
     os.setgroups([])
     os.setgid(pw.pw_gid)
     os.setuid(pw.pw_uid)
+
+
+_SENSITIVE_ENV_SUBSTRINGS = (
+    "SECRET", "PASSWORD", "TOKEN", "_KEY", "DATABASE_URL", "CREDENTIAL",
+)
+
+
+def build_scrubbed_env(env: dict[str, str] | None = None) -> dict[str, str]:
+    """Inherited parent environment with CertMgr's OWN secrets stripped, plus
+    any caller-supplied `env` merged in afterward (never scrubbed).
+
+    Every subprocess CertMgr launches (certbot, hook scripts, openssl, …)
+    inherits the rest of the parent's environment by default; this must strip
+    the JWT signing key, Vault token, AI API key, DB connection string, etc.
+    before that happens. It runs BEFORE merging `env` so admin-configured
+    hook secrets (e.g. a DNS provider API token intentionally passed to a
+    DNS-01 hook script) are never touched.
+    """
+    merged_env = {
+        k: v for k, v in os.environ.items()
+        if not any(s in k.upper() for s in _SENSITIVE_ENV_SUBSTRINGS)
+    }
+    merged_env.update(env or {})
+    return merged_env
 
 
 def run_command(
@@ -101,12 +131,7 @@ def run_command(
 
     safe_argv = [binary] + [assert_safe_argument(a) for a in argv[1:]]
 
-    merged_env = os.environ.copy()
-    merged_env.update(env or {})
-    # Prevent accidental leakage of secrets into child env
-    for key in list(merged_env):
-        if "CERTMGR_SECRETS_MASTER_KEY" in key or "PASSWORD" in key.upper():
-            merged_env.pop(key, None)
+    merged_env = build_scrubbed_env(env)
 
     start = time.perf_counter()
     logger.info("Executing: %s (timeout=%ss)", " ".join(safe_argv), timeout)

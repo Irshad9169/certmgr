@@ -13,9 +13,9 @@ from app.api.deps import (
     get_client_ip,
     get_user_agent,
 )
-from app.api.permissions import P_
+from app.api.permissions import P_, has_permission
 from app.core.config import settings
-from app.core.exceptions import ValidationAppError
+from app.core.exceptions import PermissionDeniedError, ValidationAppError
 from app.core.logging import get_logger
 from app.models.enums import AuditResult, JobTrigger
 from app.schemas.certificate import (
@@ -121,9 +121,6 @@ def create_and_issue(
 
 
 def _issue(body: IssueRequestSchema, db, user, request):
-    from app.api.permissions import has_permission
-    from app.core.exceptions import PermissionDeniedError
-
     if not has_permission(user.role_name.value, "certificate:issue"):
         raise PermissionDeniedError("You are not authorized to issue certificates")
     ensure_not_maintenance(db, operation="certificate issuance")
@@ -156,6 +153,8 @@ def renew_certificate(
     user: CurrentUser,
     request: Request,
 ):
+    if not has_permission(user.role_name.value, Perm["renew"]):
+        raise PermissionDeniedError("You are not authorized to renew certificates")
     ensure_not_maintenance(db, operation="renewal")
     execution = cert_service.renew_certificate(
         db, certificate_id, force=body.force, user=user, trigger=JobTrigger.API.value
@@ -171,6 +170,8 @@ def revoke_certificate(
     user: CurrentUser,
     request: Request,
 ):
+    if not has_permission(user.role_name.value, Perm["revoke"]):
+        raise PermissionDeniedError("You are not authorized to revoke certificates")
     ensure_not_maintenance(db, operation="revocation")
     execution = cert_service.revoke_certificate(
         db, certificate_id, reason=body.reason, delete_after=body.delete_after,
@@ -187,6 +188,8 @@ def clone_certificate(
     user: CurrentUser,
     request: Request,
 ):
+    if not has_permission(user.role_name.value, Perm["issue"]):
+        raise PermissionDeniedError("You are not authorized to issue certificates")
     new_cert = cert_service.clone_certificate(db, certificate_id, new_domains=body.domains, user=user)
     return {"certificate_id": new_cert.id, "status": new_cert.status}
 
@@ -207,6 +210,8 @@ async def import_upload(
     tags: str | None = Query(default=None),
     notes: str | None = Query(default=None, max_length=4000),
 ):
+    if not has_permission(user.role_name.value, Perm["import"]):
+        raise PermissionDeniedError("You are not authorized to import certificates")
     ensure_not_maintenance(db, operation="import")
 
     def _read_limited(upload: UploadFile) -> bytes:
@@ -240,6 +245,8 @@ def import_from_paths(
     user: CurrentUser,
     request: Request,
 ):
+    if not has_permission(user.role_name.value, Perm["import"]):
+        raise PermissionDeniedError("You are not authorized to import certificates")
     ensure_not_maintenance(db, operation="import")
     cert = cert_service.import_from_paths(
         db, cert_path=body.cert_path, key_path=body.key_path, chain_path=body.chain_path,
@@ -265,6 +272,14 @@ def bulk_actions(
         raise ValidationAppError(f"Unsupported bulk action: {action}")
     if not isinstance(ids, list) or not ids or len(ids) > 500:
         raise ValidationAppError("ids must be a non-empty list (max 500)")
+    # Require both the general bulk permission and the permission for the
+    # specific action requested — otherwise bulk would let a role escalate
+    # past what it's individually allowed to do (e.g. a role with bulk but
+    # not revoke could mass-revoke via this endpoint).
+    if not has_permission(user.role_name.value, Perm["bulk"]) or not has_permission(
+        user.role_name.value, Perm[action]
+    ):
+        raise PermissionDeniedError(f"You are not authorized to bulk {action} certificates")
     ensure_not_maintenance(db, operation=f"bulk {action}")
     result = cert_service.bulk_action(db, action=action, ids=ids, user=user, options=options)
     record(db, action=f"certificate.bulk.{action}", user_id=user.id, username=user.username,
@@ -349,11 +364,7 @@ def download_certificate(
 
 
 def _require_key_permission(user) -> None:
-    from app.api.permissions import has_permission
-
     if not has_permission(user.role_name.value, "certificate:download_key"):
-        from app.core.exceptions import PermissionDeniedError
-
         raise PermissionDeniedError("You are not authorized to download private keys")
 
 

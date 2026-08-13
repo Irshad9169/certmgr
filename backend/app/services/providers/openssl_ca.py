@@ -19,8 +19,10 @@ import tempfile
 from pathlib import Path
 
 from app.core.config import settings
+from app.core.exceptions import ValidationAppError
 from app.core.logging import get_logger
 from app.models.enums import KeyType, ValidationMethod
+from app.services.command import build_scrubbed_env
 from app.services.providers.base import (
     CertificateProvider,
     IssueRequest,
@@ -101,13 +103,17 @@ class OpenSSLCertificateAuthority(CertificateProvider):
             ])
 
             # 4) Sign with CA
-            self._run([
-                openssl, "x509", "-req", "-in", str(csr_path),
-                "-CA", str(ca_cert), "-CAkey", str(ca_key),
-                "-CAcreateserial", "-days", str(days),
-                "-out", str(cert_path),
-                "-extfile", _write_ext_file(sans),
-            ])
+            ext_file = _write_ext_file(sans)
+            try:
+                self._run([
+                    openssl, "x509", "-req", "-in", str(csr_path),
+                    "-CA", str(ca_cert), "-CAkey", str(ca_key),
+                    "-CAcreateserial", "-days", str(days),
+                    "-out", str(cert_path),
+                    "-extfile", ext_file,
+                ])
+            finally:
+                Path(ext_file).unlink(missing_ok=True)
 
             # 5) Chain = leaf + CA cert
             fullchain_path = out_dir / "fullchain.pem"
@@ -120,6 +126,12 @@ class OpenSSLCertificateAuthority(CertificateProvider):
                 chain_path=ca_cert, fullchain_path=str(fullchain_path),
                 cert_name=_slug(cn), exit_code=0,
                 metadata={"provider": self.provider_key, "ca": ca_cert},
+            )
+        except subprocess.TimeoutExpired as exc:
+            return IssueResult(
+                success=False, exit_code=124,
+                stderr=(exc.stderr or b"").decode(errors="replace") if isinstance(exc.stderr, bytes) else (exc.stderr or ""),
+                error=f"openssl command timed out after {settings.certbot_timeout_seconds}s",
             )
         except subprocess.CalledProcessError as exc:
             return IssueResult(
@@ -157,7 +169,16 @@ class OpenSSLCertificateAuthority(CertificateProvider):
             return False, str(exc)
 
     def _run(self, argv: list[str]) -> None:
-        proc = subprocess.run(argv, capture_output=True, text=True, check=False)  # noqa: S603
+        # Not routed through app.services.command.run_command(): that wrapper
+        # rejects spaces in any argv element (assert_safe_argument), which
+        # would reject legitimate `-subj` values like the default "Internal
+        # CA" org name. Still shell=False/argv-list (no injection risk from
+        # spaces here) but now with the same timeout enforcement and
+        # secret-scrubbed environment run_command gives every other command.
+        proc = subprocess.run(  # noqa: S603 — argv is a list, shell=False by design
+            argv, capture_output=True, text=True, check=False,
+            timeout=settings.certbot_timeout_seconds, env=build_scrubbed_env(),
+        )
         if proc.returncode != 0:
             raise subprocess.CalledProcessError(proc.returncode, argv, proc.stdout, proc.stderr)
 
@@ -166,13 +187,23 @@ def _slug(name: str) -> str:
     return re.sub(r"[^A-Za-z0-9_.-]", "-", name)[:120]
 
 
+def _assert_safe_rdn(field_name: str, value: str) -> str:
+    """Reject characters that let a field smuggle extra RDN components into
+    an openssl `-subj` string (e.g. org="Foo/CN=admin.internal" injecting a
+    second CN). `-subj` parses embedded `/x=y` as a new field, so `/` and `=`
+    must never appear inside a single field's value."""
+    if "/" in value or "=" in value:
+        raise ValidationAppError(f"Invalid character in certificate subject field '{field_name}'")
+    return value
+
+
 def _subject_string(config: dict, request: IssueRequest) -> str:
-    c = request.extra.get("country") or config.get("country", "US")
-    st = request.extra.get("state") or config.get("state", "")
-    loc = request.extra.get("locality") or config.get("locality", "")
-    o = request.extra.get("org") or config.get("org", "Internal CA")
-    ou = request.extra.get("org_unit") or config.get("org_unit", "IT")
-    cn = request.common_name or request.domains[0]
+    c = _assert_safe_rdn("country", request.extra.get("country") or config.get("country", "US"))
+    st = _assert_safe_rdn("state", request.extra.get("state") or config.get("state", ""))
+    loc = _assert_safe_rdn("locality", request.extra.get("locality") or config.get("locality", ""))
+    o = _assert_safe_rdn("org", request.extra.get("org") or config.get("org", "Internal CA"))
+    ou = _assert_safe_rdn("org_unit", request.extra.get("org_unit") or config.get("org_unit", "IT"))
+    cn = _assert_safe_rdn("common_name", request.common_name or request.domains[0])
     return f"/C={c}/ST={st}/L={loc}/O={o}/OU={ou}/CN={cn}"
 
 

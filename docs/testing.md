@@ -25,8 +25,10 @@ bandit -r app/ -x tests      # security scan
   shared but data is reset between tests (`clean_db` fixture).
 - `CERTMGR_CELERY_TASK_ALWAYS_EAGER=true` executes Celery tasks synchronously —
   no Redis required in CI.
-- The bootstrap admin's password is derived from the test master key; new users
-  are created through the real service layer so RBAC paths are exercised.
+- The bootstrap admin is seeded with a fixed known test password
+  (`conftest.TEST_ADMIN_PASSWORD`), set directly on the row after creation
+  since production now assigns a random one-time password; new users are
+  created through the real service layer so RBAC paths are exercised.
 - Providers are mocked at the `LetsEncryptProvider.issue/revoke` boundary with
   real certificate files written to temp dirs — the full ingest pipeline
   (parse → store → audit) is exercised for real.

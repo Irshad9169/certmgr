@@ -7,9 +7,9 @@ from fastapi import APIRouter, Query, Request
 from pydantic import BaseModel, Field
 
 from app.api.deps import CurrentUser, DbSession, get_client_ip, get_user_agent
-from app.api.permissions import P_
+from app.api.permissions import P_, has_permission
 from app.core.config import settings
-from app.core.exceptions import NotFoundError
+from app.core.exceptions import NotFoundError, PermissionDeniedError
 from app.models.enums import AuditResult
 from app.models.server import Deployment, DeploymentTemplate
 from app.services import deployment_service
@@ -47,6 +47,8 @@ class TemplateCreate(BaseModel):
 def deploy(
     body: DeployRequest, db: DbSession, user: CurrentUser, request: Request,
 ):
+    if not has_permission(user.role_name.value, DEPLOY):
+        raise PermissionDeniedError("You are not authorized to deploy certificates")
     ensure_not_maintenance(db, operation="deployment")
     if settings.celery_task_always_eager:
         deployment = deployment_service.deploy_certificate(
@@ -100,6 +102,8 @@ def get_deployment(deployment_id: int, db: DbSession, user: CurrentUser):
 
 @router.post("/{deployment_id}/rollback")
 def rollback(deployment_id: int, db: DbSession, user: CurrentUser, request: Request):
+    if not has_permission(user.role_name.value, DEPLOY):
+        raise PermissionDeniedError("You are not authorized to roll back deployments")
     row = db.query(Deployment).filter(Deployment.id == deployment_id).first()
     if row is None:
         raise NotFoundError("Deployment not found")
