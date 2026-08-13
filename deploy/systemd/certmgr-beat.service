@@ -9,7 +9,7 @@ User=certmgr
 Group=certmgr
 WorkingDirectory=/opt/certmgr/backend
 EnvironmentFile=/etc/certmgr/certmgr.env
-ExecStart=/opt/certmgr/backend/.venv/bin/celery -A app.tasks.celery_app:celery_app beat --loglevel=INFO
+ExecStart=/opt/certmgr/backend/.venv/bin/celery -A app.tasks.celery_app:celery_app beat --loglevel=INFO --schedule=/var/lib/certmgr/celerybeat-schedule
 Restart=on-failure
 RestartSec=5
 NoNewPrivileges=true
