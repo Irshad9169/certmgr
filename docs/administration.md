@@ -36,6 +36,40 @@ Secrets are Fernet-encrypted before storage; the UI shows only `[SET]`.
 - Adding a CA: implement `CertificateProvider`, register the entry point
   `certmgr.providers`, restart. No core changes.
 
+## Running the worker as root for root-only hook scripts
+
+`certmgr-worker` normally runs as the unprivileged `certmgr` (or `$APP_USER`)
+service account, matching `certmgr-api` and `certmgr-beat`. Some sites have
+pre-existing certbot auth/cleanup hook scripts that require root — e.g. a
+script that `ssh`es out as root to place an HTTP-01 challenge file on a
+separate front-end host, where no lesser-privileged account is authorized for
+that hop, and organizational policy doesn't permit adding one (e.g. sudoers
+is centrally managed and closed to new rules, or the service account has a
+`nologin` shell that's itself denied `sudo` by PAM). In that situation the
+practical options are: get the target host to authorize a scoped account/key
+for the hop, or run just the worker as root.
+
+If you must run the worker as root: edit the deployed
+`/etc/systemd/system/certmgr-worker.service` (not just the repo template —
+`systemctl` reads the installed copy) and change:
+
+```
+User=root
+Group=root
+ProtectHome=read-only   # ProtectHome=true hides /root/.ssh, breaking the hook's own SSH
+```
+
+then `systemctl daemon-reload && systemctl restart certmgr-worker`. Only
+`certmgr-worker` ever executes certbot/hooks — leave `certmgr-api` and
+`certmgr-beat` on the unprivileged account, since elevating them buys no
+benefit and only widens what a bug in the RBAC-facing API process could
+reach. This is a real reduction in process isolation for the worker
+specifically — a bug in certificate issuance/renewal code, or in a
+third-party CA provider plugin, now runs as root instead of a scoped service
+account. Weigh it against your actual constraint before applying it, and
+prefer getting the remote host to authorize a scoped, non-root account for
+the SSH hop if that ever becomes possible.
+
 ## Maintenance mode
 
 Settings → Maintenance: pause renewals / deployments / notifications / imports /

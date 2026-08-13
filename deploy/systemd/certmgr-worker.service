@@ -18,6 +18,16 @@ ProtectSystem=strict
 ProtectHome=true
 ReadWritePaths=/var/lib/certmgr /var/log/certmgr /etc/letsencrypt
 LimitNOFILE=65536
+# OVERRIDE for sites whose certbot auth/cleanup hooks require root (e.g. a
+# script that SSHes out as root to place a challenge file on another host,
+# with no lesser-privileged account authorized for that hop): change the
+# three lines below and re-run `systemctl daemon-reload`. See
+# docs/administration.md#running-the-worker-as-root-for-root-only-hook-scripts
+# for the full tradeoff — this loses the process-isolation benefit of a
+# dedicated service account for this unit specifically.
+#   User=root
+#   Group=root
+#   ProtectHome=read-only   # true would hide /root/.ssh from the hook's own SSH
 
 [Install]
 WantedBy=multi-user.target
