@@ -327,7 +327,13 @@ def issue_certificate(
     db.commit()
 
     if execute:
-        execution = _execute_issuance(db, cert, user, trigger)
+        # Pass the original payload through directly — it's still in scope
+        # here (synchronous path) and has fields the Certificate row can't
+        # carry (auth_hook/cleanup_hook/webroot_path/standalone_port/hook_env/
+        # a caller-supplied email). Only the async Celery path (which only
+        # gets a serializable certificate_id) needs _execute_issuance's
+        # from-the-row reconstruction.
+        execution = _execute_issuance(db, cert, user, trigger, payload=payload)
         cert = get_certificate(db, cert.id)
         cert.extra_execution = execution  # type: ignore[attr-defined]
     return cert
@@ -356,7 +362,7 @@ def _provider_for(db: Session, cert: Certificate):
 
 
 def _execute_issuance(db: Session, cert: Certificate, user: User | None,
-                      trigger: str) -> JobExecution:
+                      trigger: str, payload: dict[str, Any] | None = None) -> JobExecution:
     """Run the provider synchronously and update the certificate row."""
     from app.core.logging import Timer
 
@@ -387,15 +393,23 @@ def _execute_issuance(db: Session, cert: Certificate, user: User | None,
         db.commit()
         return execution
 
-    # Rebuild IssueRequest from the certificate row
-    payload = {
-        "domains": [cert.domain] + [d for d in cert.sans if d != cert.domain],
-        "validation_method": cert.validation_method,
-        "key_type": cert.key_type,
-        "environment": cert.environment,
-        "staging": cert.staging,
-        "dry_run": cert.dry_run,
-    }
+    if payload is None:
+        # Async path (Celery task only has certificate_id, not the original
+        # in-memory payload) — reconstruct from the persisted row. NOTE: the
+        # Certificate model has no columns for webroot_path/standalone_port/
+        # auth_hook/cleanup_hook/hook_env/a caller-supplied email, so queued
+        # issuance for webroot/standalone/custom/manual-* validation methods
+        # will lose that configuration here. Use
+        # CERTMGR_CELERY_TASK_ALWAYS_EAGER=true (synchronous) for those until
+        # this is persisted properly.
+        payload = {
+            "domains": [cert.domain] + [d for d in cert.sans if d != cert.domain],
+            "validation_method": cert.validation_method,
+            "key_type": cert.key_type,
+            "environment": cert.environment,
+            "staging": cert.staging,
+            "dry_run": cert.dry_run,
+        }
     request = build_issue_request(db, payload, cert_name=cert.cert_name)
     request.email = request.email or settings.default_letsencrypt_email
 
