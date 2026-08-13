@@ -123,6 +123,17 @@ def build_certbot_env(req: CertbotRequest) -> dict[str, str]:
     return env
 
 
+def _workdir_args(workdir: str | None) -> list[str]:
+    """config-dir/work-dir/logs-dir override — without it certbot falls back
+    to its system defaults (/etc/letsencrypt, /var/lib/letsencrypt,
+    /var/log/letsencrypt), which a non-root service account generally can't
+    write to."""
+    if not workdir:
+        return []
+    return ["--config-dir", str(workdir), "--work-dir", str(workdir),
+            "--logs-dir", str(Path(settings.log_root_path) / "certbot")]
+
+
 def build_issue_command(req: CertbotRequest) -> list[str]:
     domains = validate_domain_list(req.domains, allow_wildcard=True)
     argv: list[str] = [
@@ -139,9 +150,7 @@ def build_issue_command(req: CertbotRequest) -> list[str]:
     argv += _key_type_args(req)
     argv += _validation_args(req)
     argv += _hook_args(req)
-    if req.workdir:
-        argv += ["--config-dir", str(req.workdir), "--work-dir", str(req.workdir),
-                 "--logs-dir", str(Path(settings.log_root_path) / "certbot")]
+    argv += _workdir_args(req.workdir)
     if req.prefer_chain:
         argv += ["--preferred-chain", req.prefer_chain]
     if req.staging:
@@ -154,7 +163,7 @@ def build_issue_command(req: CertbotRequest) -> list[str]:
 
 
 def build_renew_command(cert_name: str, *, force: bool = False, staging: bool = False,
-                        dry_run: bool = False) -> list[str]:
+                        dry_run: bool = False, workdir: str | None = None) -> list[str]:
     argv: list[str] = [settings.certbot_binary, "renew", "--non-interactive", "--no-self-upgrade"]
     if cert_name:
         argv += ["--cert-name", cert_name]
@@ -164,11 +173,12 @@ def build_renew_command(cert_name: str, *, force: bool = False, staging: bool = 
         argv += ["--dry-run"]
     if staging:
         argv += ["--staging"]
+    argv += _workdir_args(workdir)
     return argv
 
 
 def build_revoke_command(cert_path: str, *, reason: str = "unspecified",
-                         delete_after: bool = False) -> list[str]:
+                         delete_after: bool = False, workdir: str | None = None) -> list[str]:
     argv: list[str] = [settings.certbot_binary, "revoke", "--cert-path", cert_path]
     valid_reasons = {"unspecified", "keycompromise", "affiliationchanged", "superseded",
                      "cessationofoperation"}
@@ -177,6 +187,7 @@ def build_revoke_command(cert_path: str, *, reason: str = "unspecified",
     argv += ["--reason", reason]
     if delete_after:
         argv += ["--delete-after"]
+    argv += _workdir_args(workdir)
     return argv
 
 
@@ -213,11 +224,13 @@ class CertbotExecutor:
                             timeout=req.hook_timeout)
 
     def renew(self, cert_name: str, *, force: bool = False, staging: bool = False,
-              dry_run: bool = False) -> CertbotOutcome:
-        return self.execute(build_renew_command(cert_name, force=force, staging=staging, dry_run=dry_run))
+              dry_run: bool = False, workdir: str | None = None) -> CertbotOutcome:
+        return self.execute(build_renew_command(cert_name, force=force, staging=staging,
+                                                 dry_run=dry_run, workdir=workdir))
 
-    def revoke(self, cert_path: str, *, reason: str = "unspecified") -> CertbotOutcome:
-        return self.execute(build_revoke_command(cert_path, reason=reason))
+    def revoke(self, cert_path: str, *, reason: str = "unspecified",
+              workdir: str | None = None) -> CertbotOutcome:
+        return self.execute(build_revoke_command(cert_path, reason=reason, workdir=workdir))
 
     @staticmethod
     def default_cert_directory() -> Path:

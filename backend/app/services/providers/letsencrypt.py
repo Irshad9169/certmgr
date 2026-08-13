@@ -78,7 +78,13 @@ class LetsEncryptProvider(CertificateProvider):
             hook_execution_user=request.hook_execution_user,
             hook_working_directory=request.hook_working_directory,
             hook_timeout=request.hook_timeout,
-            workdir=request.extra.get("workdir"),
+            # Falls back to the admin-configured CERTMGR_CERTBOT_WORKDIR so
+            # certbot actually writes into a location the service account can
+            # use (config-dir/work-dir/logs-dir) instead of silently trying
+            # its own system defaults (/etc/letsencrypt, /var/lib/letsencrypt,
+            # /var/log/letsencrypt) — which a non-root service user generally
+            # can't write to. `extra.workdir` still overrides per-request.
+            workdir=request.extra.get("workdir") or settings.certbot_workdir,
             prefer_chain=request.extra.get("prefer_chain"),
         )
         try:
@@ -114,7 +120,8 @@ class LetsEncryptProvider(CertificateProvider):
     def renew(self, cert_name: str, *, force: bool = False, staging: bool = False,
               dry_run: bool = False) -> RenewResult:
         try:
-            outcome = self.executor.renew(cert_name, force=force, staging=staging, dry_run=dry_run)
+            outcome = self.executor.renew(cert_name, force=force, staging=staging, dry_run=dry_run,
+                                          workdir=settings.certbot_workdir)
         except (CertbotError, OSError) as exc:
             return RenewResult(success=False, error=str(exc))
 
@@ -135,7 +142,7 @@ class LetsEncryptProvider(CertificateProvider):
     # ── Revoke ──────────────────────────────────────────────────────────────
     def revoke(self, cert_path: str, *, reason: str = "unspecified") -> RevokeResult:
         try:
-            outcome = self.executor.revoke(cert_path, reason=reason)
+            outcome = self.executor.revoke(cert_path, reason=reason, workdir=settings.certbot_workdir)
         except (CertbotError, OSError) as exc:
             return RevokeResult(success=False, error=str(exc))
         return RevokeResult(
