@@ -93,14 +93,14 @@ def _validation_args(req: CertbotRequest) -> list[str]:
     if method == ValidationMethod.MANUAL_DNS.value:
         return ["--manual", "--preferred-challenges", "dns"]
     if method == ValidationMethod.CUSTOM.value:
-        args: list[str] = []
-        if req.auth_hook:
-            args += ["--manual-auth-hook", req.auth_hook]
-        if req.cleanup_hook:
-            args += ["--manual-cleanup-hook", req.cleanup_hook]
-        if not args:
+        if not req.auth_hook:
             raise CertbotError("Custom validation requires an auth hook")
-        return args
+        # Select certbot's "manual" authenticator plugin — without this,
+        # certbot has no authenticator to run --manual-auth-hook/-cleanup-hook
+        # under and will fail to find a suitable plugin in non-interactive
+        # mode. The actual hook flags are added once, by _hook_args() below
+        # (previously duplicated here too).
+        return ["--manual"]
     raise CertbotError(f"Unsupported validation method: {method}")
 
 
