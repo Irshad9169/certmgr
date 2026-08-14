@@ -80,6 +80,28 @@ def update_user(user_id: int, body: dict[str, Any], db: DbSession, user: Current
     target = db.query(User).filter(User.id == user_id).first()
     if target is None:
         raise NotFoundError("User not found")
+
+    # Never allow the last active administrator to be disabled or demoted —
+    # there's no recovery path from that except direct DB/script access.
+    losing_admin_status = (
+        target.role_name.value == "administrator" and target.is_active
+        and (
+            ("is_active" in body and not body["is_active"])
+            or ("role" in body and body["role"] != "administrator")
+        )
+    )
+    if losing_admin_status:
+        other_active_admins = (
+            db.query(User)
+            .join(Role)
+            .filter(Role.name == "administrator", User.is_active.is_(True), User.id != target.id)
+            .count()
+        )
+        if other_active_admins == 0:
+            raise ValidationAppError(
+                "Cannot disable or change the role of the last active administrator"
+            )
+
     if "full_name" in body:
         target.full_name = body["full_name"]
     if "email" in body:

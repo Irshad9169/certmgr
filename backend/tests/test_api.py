@@ -73,6 +73,27 @@ def test_admin_can_create_user(client, admin_headers):
     assert resp.json()["role"] == "operator"
 
 
+def test_cannot_disable_last_administrator(client, admin_headers, admin_user):
+    resp = client.patch(f"/api/v1/users/{admin_user.id}", headers=admin_headers,
+                        json={"is_active": False})
+    assert resp.status_code == 422
+    assert "last active administrator" in resp.text
+
+
+def test_cannot_demote_last_administrator(client, admin_headers, admin_user):
+    resp = client.patch(f"/api/v1/users/{admin_user.id}", headers=admin_headers,
+                        json={"role": "operator"})
+    assert resp.status_code == 422
+    assert "last active administrator" in resp.text
+
+
+def test_can_disable_administrator_when_another_remains(client, admin_headers, admin_user, role_headers_factory):
+    role_headers_factory("second_admin", "administrator")
+    resp = client.patch(f"/api/v1/users/{admin_user.id}", headers=admin_headers,
+                        json={"is_active": False})
+    assert resp.status_code == 200, resp.text
+
+
 # ── Inventory ───────────────────────────────────────────────────────────────
 def test_inventory_pagination_and_sort(client, admin_headers):
     resp = client.get("/api/v1/certificates", headers=admin_headers,
