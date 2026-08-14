@@ -269,7 +269,9 @@ export default function CertificatesPage() {
                   </TableCell>
                   <TableCell>
                     <Tooltip title={cert.issuer ?? ''}>
-                      <Typography variant="caption">{cert.issuer?.split(',')[0]?.slice(0, 28) ?? '—'}</Typography>
+                      <Typography variant="caption" sx={{ display: 'block', maxWidth: 220, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {cert.issuer || '—'}
+                      </Typography>
                     </Tooltip>
                   </TableCell>
                   <TableCell>

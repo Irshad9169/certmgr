@@ -180,6 +180,19 @@ def revoke_certificate(
     return {"certificate_id": certificate_id, "execution": _serialize_execution(execution)}
 
 
+@router.delete("/{certificate_id}")
+def delete_certificate(
+    certificate_id: int,
+    db: DbSession,
+    user: CurrentUser,
+    request: Request,
+):
+    if not has_permission(user.role_name.value, Perm["delete"]):
+        raise PermissionDeniedError("You are not authorized to delete certificates")
+    cert_service.delete_certificate(db, certificate_id, user=user)
+    return {"certificate_id": certificate_id, "deleted": True}
+
+
 @router.post("/{certificate_id}/clone")
 def clone_certificate(
     certificate_id: int,

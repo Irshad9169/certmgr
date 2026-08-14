@@ -8,10 +8,12 @@ import os
 import pytest
 from conftest import _build_pfx, _generate_self_signed  # noqa: F401
 
-from app.core.exceptions import ConflictError, ValidationAppError
+from app.core.exceptions import ConflictError, NotFoundError, ValidationAppError
 from app.services import storage
 from app.services.certificate_service import (
+    delete_certificate,
     export_bundle,
+    get_certificate,
     import_certificate,
     issue_certificate,
     list_certificates,
@@ -190,3 +192,26 @@ def test_revoke_flow(db, admin_user, monkeypatch, tmp_path):
     execution = revoke_certificate(db, cert.id, user=admin_user)
     assert execution.status == "success"
     assert cert.status == "revoked"
+
+
+def test_delete_revoked_certificate(db, sample_certificate, admin_user):
+    cert = import_certificate(db, cert_data=sample_certificate["cert_pem"],
+                              key_data=sample_certificate["key_pem"])
+    cert.status = "revoked"
+    db.commit()
+    cert_id = cert.id
+
+    delete_certificate(db, cert_id, user=admin_user)
+
+    with pytest.raises(NotFoundError):
+        get_certificate(db, cert_id)
+
+
+def test_delete_active_certificate_rejected(db, sample_certificate):
+    cert = import_certificate(db, cert_data=sample_certificate["cert_pem"],
+                              key_data=sample_certificate["key_pem"])
+    assert cert.status == "active"
+    with pytest.raises(ValidationAppError):
+        delete_certificate(db, cert.id)
+    # Row must still exist — rejection shouldn't have deleted anything.
+    assert get_certificate(db, cert.id) is not None

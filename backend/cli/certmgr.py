@@ -110,6 +110,16 @@ def revoke(cert: int = typer.Option(..., "--cert", "-c"), reason: str = "unspeci
         typer.echo(json.dumps({"certificate_id": cert, "status": execution.status}, indent=2))
 
 
+@app.command("delete-cert")
+def delete_cert(cert: int = typer.Option(..., "--cert", "-c")):
+    """Permanently delete a certificate row (failed/revoked/archived only)."""
+    from app.services.certificate_service import delete_certificate
+
+    with _db() as db:
+        delete_certificate(db, cert)
+        typer.echo(json.dumps({"certificate_id": cert, "deleted": True}, indent=2))
+
+
 # ── deploy ─────────────────────────────────────────────────────────────────
 @app.command()
 def deploy(

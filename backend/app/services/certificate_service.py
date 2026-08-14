@@ -640,6 +640,41 @@ def revoke_certificate(db: Session, certificate_id: int, *, reason: str = "unspe
     return execution
 
 
+_DELETABLE_STATUSES = {
+    CertificateStatus.FAILED.value, CertificateStatus.REVOKED.value,
+    CertificateStatus.ARCHIVED.value,
+}
+
+
+def delete_certificate(db: Session, certificate_id: int, *, user: User | None = None) -> None:
+    """Permanently remove a certificate row (failed/revoked/archived only —
+    never active/issuing/renewing, to avoid deleting something still in use).
+    Related rows (domains, executions, deployments, backups, health checks,
+    tags) cascade at the DB level; every FK referencing certificates.id
+    already has an explicit ON DELETE CASCADE/SET NULL (see the initial
+    schema migration), so no explicit cleanup is needed for those."""
+    cert = get_certificate(db, certificate_id, load_relations=False)
+    if cert.status not in _DELETABLE_STATUSES:
+        raise ValidationAppError(
+            f"Cannot delete a certificate with status '{cert.status}' — "
+            "only failed, revoked or archived certificates can be deleted. "
+            "Revoke an active certificate first."
+        )
+    if cert.cert_path:
+        try:
+            storage_module.get_file_store().delete_cert_material(cert.fingerprint_sha256)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("File cleanup during delete failed: %s", exc)
+
+    domain, cert_status = cert.domain, cert.status
+    db.delete(cert)
+    record(db, action="certificate.delete", user_id=user.id if user else None,
+           username=user.username if user else None,
+           resource_type="certificate", resource_id=certificate_id,
+           result=AuditResult.SUCCESS, details={"domain": domain, "status": cert_status})
+    db.commit()
+
+
 # ── Import ──────────────────────────────────────────────────────────────────
 
 def import_certificate(
