@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 
 from app.core.config import settings
+from app.core.exceptions import SecurityError, ValidationAppError
 from app.core.logging import get_logger
 from app.models.enums import KeyType, ValidationMethod
 from app.services.certbot import CertbotError, CertbotExecutor, CertbotRequest
@@ -88,8 +89,16 @@ class LetsEncryptProvider(CertificateProvider):
             prefer_chain=request.extra.get("prefer_chain"),
         )
         try:
-            outcome = self.executor.issue(req)
-        except (CertbotError, OSError) as exc:
+            if request.ssh_private_key_encrypted:
+                from app.core.security import decrypt_secret
+                from app.services.ssh_credentials import TemporarySSHIdentity
+
+                private_key = decrypt_secret(request.ssh_private_key_encrypted)
+                with TemporarySSHIdentity(private_key, request.ssh_target_host):
+                    outcome = self.executor.issue(req)
+            else:
+                outcome = self.executor.issue(req)
+        except (CertbotError, OSError, ValidationAppError, SecurityError) as exc:
             return IssueResult(success=False, error=str(exc))
 
         if outcome.success and not request.dry_run:

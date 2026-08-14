@@ -140,6 +140,8 @@ export interface Hook {
   is_active: boolean
   is_default: boolean
   description?: string | null
+  has_ssh_key: boolean
+  ssh_target_host?: string | null
 }
 
 export interface DashboardStats {

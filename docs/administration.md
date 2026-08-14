@@ -70,6 +70,50 @@ account. Weigh it against your actual constraint before applying it, and
 prefer getting the remote host to authorize a scoped, non-root account for
 the SSH hop if that ever becomes possible.
 
+## SSH credentials for hook scripts (Jenkins-credential-style)
+
+Some auth/cleanup hook scripts `ssh` to a remote host with no `-i` flag to
+place/remove an ACME challenge file — e.g. `ssh -l root front-end01 "echo
+$VALIDATION > .well-known/acme-challenge/$TOKEN"`. That only works when the
+calling process already trusts a key (an interactively-forwarded agent, or a
+key at one of ssh's default identity paths), which a headless
+`certmgr-worker` doesn't have. Rather than editing the hook script, a Hook
+row can carry an encrypted SSH private key (Hooks page → New/Edit hook →
+"SSH credential") and a target host; CertMgr stages it as a scoped,
+temporary `ssh_config` `Host` entry for the duration of a single hook-driven
+issuance, then removes it — the key is Fernet-encrypted at rest and never
+returned by the API (masked as "configured" in the UI, replace/clear only).
+
+**One-time setup required** before this works, on whatever host runs
+`certmgr-worker`:
+
+1. Add an `Include` line near the **top** of the worker's `~/.ssh/config`
+   (create the file if it doesn't exist), pointing at the directory CertMgr
+   stages per-job fragments into:
+
+   ```
+   Include ~/.ssh/certmgr.d/*.conf
+   ```
+
+   (Matches the default `CERTMGR_SSH_CONFIG_INCLUDE_DIR=~/.ssh/certmgr.d` —
+   override that env var if you want a different directory, and update the
+   `Include` line to match.)
+
+2. If the worker's systemd unit hardens the filesystem (`ProtectHome=`,
+   `ProtectSystem=strict`), make sure the worker's `~/.ssh` directory and
+   `CERTMGR_SSH_KEY_STAGING_DIR` (default `/var/lib/certmgr/tmp/ssh`, already
+   under the default `ReadWritePaths=`) are writable. If the worker runs as
+   `root` under `ProtectHome=read-only` (see the section above), add the
+   `~/.ssh/certmgr.d` directory specifically to `ReadWritePaths=` — read-only
+   mode allows reads but not the writes CertMgr needs there.
+
+3. Restart `certmgr-worker` after changing either file.
+
+Without step 1, CertMgr refuses to run the issuance rather than silently
+proceed without the credential — you'll see a clear "SSH credential
+injection requires a one-time setup step" error on the certificate's job
+execution log instead.
+
 ## Maintenance mode
 
 Settings → Maintenance: pause renewals / deployments / notifications / imports /

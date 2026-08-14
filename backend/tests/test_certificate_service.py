@@ -223,12 +223,16 @@ def test_async_issuance_reconstructs_persisted_hook_config(db, admin_user, monke
     hooks/webroot/standalone/email must round-trip through the Certificate
     row itself. Exercises the exact `_execute_issuance(db, cert, None, ...,
     payload=None)` call the Celery task makes."""
+    from app.core.security import encrypt_secret
     from app.models.certificate import Hook
     from app.services.certificate_service import _execute_issuance
     from app.services.providers.letsencrypt import LetsEncryptProvider
 
+    ssh_key_pem = "-----BEGIN OPENSSH PRIVATE KEY-----\nZmFrZQ==\n-----END OPENSSH PRIVATE KEY-----\n"
     auth_hook = Hook(name="auth-hook", hook_type="auth", script_path="/opt/hooks/auth.pl",
-                     execution_user="hookuser", working_directory="/opt/hooks", timeout_seconds=120)
+                     execution_user="hookuser", working_directory="/opt/hooks", timeout_seconds=120,
+                     ssh_private_key_encrypted=encrypt_secret(ssh_key_pem),
+                     ssh_target_host="lets-encrypt01.example.com")
     cleanup_hook = Hook(name="cleanup-hook", hook_type="cleanup", script_path="/opt/hooks/cleanup.pl",
                         env_vars={"HOOK_TOKEN": "abc"})
     db.add_all([auth_hook, cleanup_hook])
@@ -255,6 +259,9 @@ def test_async_issuance_reconstructs_persisted_hook_config(db, admin_user, monke
     assert cert.hook_execution_user == "hookuser"
     assert cert.hook_working_directory == "/opt/hooks"
     assert cert.hook_timeout == 120
+    assert cert.ssh_target_host == "lets-encrypt01.example.com"
+    assert cert.ssh_private_key_encrypted is not None
+    assert cert.ssh_private_key_encrypted != ssh_key_pem  # stored encrypted
 
     _cert_obj, cert_pem, _key_pem = _generate_self_signed(["hooked.example.com"])
     cert_file = tmp_path / "cert.pem"
@@ -279,3 +286,5 @@ def test_async_issuance_reconstructs_persisted_hook_config(db, admin_user, monke
     assert request.hook_execution_user == "hookuser"
     assert request.hook_working_directory == "/opt/hooks"
     assert request.hook_timeout == 120
+    assert request.ssh_target_host == "lets-encrypt01.example.com"
+    assert request.ssh_private_key_encrypted == cert.ssh_private_key_encrypted

@@ -10,7 +10,7 @@ from __future__ import annotations
 import os
 from datetime import timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 
 from sqlalchemy import func, or_
 from sqlalchemy.orm import Session, joinedload
@@ -200,11 +200,12 @@ def build_issue_request(db: Session, payload: dict[str, Any], cert_name: str | N
     hook_env: dict[str, str] = {}
     hook_user = hook_cwd = None
     hook_timeout = 300
+    ssh_key = ssh_host = None
 
     if method in _HOOKED_METHODS or payload.get("auth_hook_id") or payload.get("cleanup_hook_id"):
         hook = _resolve_hooks(db, payload)
         if hook:
-            auth_hook, cleanup_hook, hook_env, hook_user, hook_cwd, hook_timeout = hook
+            auth_hook, cleanup_hook, hook_env, hook_user, hook_cwd, hook_timeout, ssh_key, ssh_host = hook
 
     return IssueRequest(
         domains=domains,
@@ -222,52 +223,68 @@ def build_issue_request(db: Session, payload: dict[str, Any], cert_name: str | N
         hook_execution_user=hook_user,
         hook_working_directory=hook_cwd,
         hook_timeout=hook_timeout,
+        ssh_private_key_encrypted=ssh_key,
+        ssh_target_host=ssh_host,
         cert_name=cert_name,
         extra=payload.get("extra") or {},
     )
 
 
-def _resolve_hooks(db: Session, payload: dict[str, Any]):
+class ResolvedHooks(NamedTuple):
+    auth_hook: str | None
+    cleanup_hook: str | None
+    env: dict[str, str]
+    execution_user: str | None
+    working_directory: str | None
+    timeout_seconds: int
+    ssh_private_key_encrypted: str | None
+    ssh_target_host: str | None
+
+
+def _resolve_hooks(db: Session, payload: dict[str, Any]) -> ResolvedHooks | None:
     """Resolve hook rows (or inline paths) to certbot hook configuration."""
     from app.models.certificate import Hook
 
     auth_hook = payload.get("auth_hook")
     cleanup_hook = payload.get("cleanup_hook")
+    auth_row = cleanup_row = None
     if payload.get("auth_hook_id"):
-        row = db.query(Hook).filter(Hook.id == payload["auth_hook_id"], Hook.is_active.is_(True)).first()
-        if row is None:
+        auth_row = db.query(Hook).filter(Hook.id == payload["auth_hook_id"], Hook.is_active.is_(True)).first()
+        if auth_row is None:
             raise NotFoundError("Authentication hook not found")
-        auth_hook = row.script_path
+        auth_hook = auth_row.script_path
     if payload.get("cleanup_hook_id"):
-        row = db.query(Hook).filter(Hook.id == payload["cleanup_hook_id"], Hook.is_active.is_(True)).first()
-        if row is None:
+        cleanup_row = db.query(Hook).filter(Hook.id == payload["cleanup_hook_id"], Hook.is_active.is_(True)).first()
+        if cleanup_row is None:
             raise NotFoundError("Cleanup hook not found")
-        cleanup_hook = row.script_path
+        cleanup_hook = cleanup_row.script_path
 
     if not auth_hook and not cleanup_hook:
         return None
 
     # Merge inline env vars
     env: dict[str, str] = {}
-    if payload.get("auth_hook_id"):
-        row = db.query(Hook).filter(Hook.id == payload["auth_hook_id"]).first()
-        env.update(row.env_vars or {})
-    if payload.get("cleanup_hook_id"):
-        row = db.query(Hook).filter(Hook.id == payload["cleanup_hook_id"]).first()
-        env.update(row.env_vars or {})
+    if auth_row:
+        env.update(auth_row.env_vars or {})
+    if cleanup_row:
+        env.update(cleanup_row.env_vars or {})
     env.update(payload.get("hook_env") or {})
 
-    hook_row = None
-    if payload.get("auth_hook_id"):
-        hook_row = db.query(Hook).filter(Hook.id == payload["auth_hook_id"]).first()
-    elif payload.get("cleanup_hook_id"):
-        hook_row = db.query(Hook).filter(Hook.id == payload["cleanup_hook_id"]).first()
+    hook_row = auth_row or cleanup_row
+    # An SSH credential may live on either hook row; auth_row wins if both
+    # happen to have one set (matches which hook actually needs to SSH out
+    # in the common case — the authenticator, not the cleanup script).
+    ssh_row = auth_row if (auth_row and auth_row.ssh_private_key_encrypted) else cleanup_row
 
-    return (
-        auth_hook, cleanup_hook, env,
-        hook_row.execution_user if hook_row else None,
-        hook_row.working_directory if hook_row else None,
-        hook_row.timeout_seconds if hook_row else 300,
+    return ResolvedHooks(
+        auth_hook=auth_hook,
+        cleanup_hook=cleanup_hook,
+        env=env,
+        execution_user=hook_row.execution_user if hook_row else None,
+        working_directory=hook_row.working_directory if hook_row else None,
+        timeout_seconds=hook_row.timeout_seconds if hook_row else 300,
+        ssh_private_key_encrypted=ssh_row.ssh_private_key_encrypted if ssh_row else None,
+        ssh_target_host=ssh_row.ssh_target_host if ssh_row else None,
     )
 
 
@@ -291,10 +308,11 @@ def issue_certificate(
     auth_hook = cleanup_hook = None
     hook_env: dict[str, str] = {}
     hook_user = hook_cwd = hook_timeout = None
+    ssh_key = ssh_host = None
     if method in _HOOKED_METHODS or payload.get("auth_hook_id") or payload.get("cleanup_hook_id"):
         hook = _resolve_hooks(db, payload)
         if hook:
-            auth_hook, cleanup_hook, hook_env, hook_user, hook_cwd, hook_timeout = hook
+            auth_hook, cleanup_hook, hook_env, hook_user, hook_cwd, hook_timeout, ssh_key, ssh_host = hook
 
     cert = Certificate(
         domain=payload["domains"][0].lower().rstrip("."),
@@ -323,6 +341,8 @@ def issue_certificate(
         hook_execution_user=hook_user,
         hook_working_directory=hook_cwd,
         hook_timeout=hook_timeout,
+        ssh_private_key_encrypted=ssh_key,
+        ssh_target_host=ssh_host,
     )
     db.add(cert)
     db.flush()
@@ -443,6 +463,8 @@ def _execute_issuance(db: Session, cert: Certificate, user: User | None,
         request.hook_execution_user = cert.hook_execution_user
         request.hook_working_directory = cert.hook_working_directory
         request.hook_timeout = cert.hook_timeout or request.hook_timeout
+        request.ssh_private_key_encrypted = cert.ssh_private_key_encrypted
+        request.ssh_target_host = cert.ssh_target_host
     request.email = request.email or settings.default_letsencrypt_email
 
     result = provider.issue(request)

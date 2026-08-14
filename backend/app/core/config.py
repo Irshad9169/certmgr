@@ -114,6 +114,14 @@ class Settings(BaseSettings):
     default_staging: bool = False
     default_environment: str = "production"
 
+    # ── SSH credentials for hook scripts ────────────────────────────────────
+    # A Hook may carry an encrypted SSH private key (see app/services/
+    # ssh_credentials.py) for scripts that SSH to a remote host with no -i
+    # flag. Requires a one-time `Include ~/certmgr.d/*.conf` line added to
+    # the service account's ~/.ssh/config — see docs/administration.md.
+    ssh_key_staging_dir: str = "/var/lib/certmgr/tmp/ssh"
+    ssh_config_include_dir: str = "~/.ssh/certmgr.d"
+
     # ── Renewal / scheduler ──────────────────────────────────────────────────
     renewal_threshold_days: int = 30
     renewal_retry_max: int = 3

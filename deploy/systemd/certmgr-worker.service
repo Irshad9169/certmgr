@@ -28,6 +28,12 @@ LimitNOFILE=65536
 #   User=root
 #   Group=root
 #   ProtectHome=read-only   # true would hide /root/.ssh from the hook's own SSH
+#
+# If you also use the Hooks page's "SSH credential" feature (an alternative
+# to running as root — see docs/administration.md#ssh-credentials-for-hook-scripts-jenkins-credential-style),
+# add the per-job config directory it writes to alongside the paths above,
+# since ProtectHome=read-only/true otherwise blocks writes there:
+#   ReadWritePaths=/var/lib/certmgr /var/log/certmgr /etc/letsencrypt %h/.ssh/certmgr.d
 
 [Install]
 WantedBy=multi-user.target

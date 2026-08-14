@@ -31,6 +31,8 @@ class IssueRequest:
     hook_execution_user: str | None = None
     hook_working_directory: str | None = None
     hook_timeout: int = 300
+    ssh_private_key_encrypted: str | None = None
+    ssh_target_host: str | None = None
     cert_name: str | None = None
     common_name: str | None = None
     organizational_units: list[str] = field(default_factory=list)

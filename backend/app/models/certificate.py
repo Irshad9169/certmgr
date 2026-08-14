@@ -144,6 +144,12 @@ class Certificate(Base, IntPkMixin, TimestampMixin):
     hook_execution_user: Mapped[str | None] = mapped_column(String(64), nullable=True)
     hook_working_directory: Mapped[str | None] = mapped_column(Text, nullable=True)
     hook_timeout: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # Same already-resolved-at-issuance-time principle as the hook_* columns
+    # above — captured from the Hook row's ssh_private_key_encrypted/
+    # ssh_target_host (see Hook model) so async reconstruction can still
+    # deploy the same temporary SSH identity the original request used.
+    ssh_private_key_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
+    ssh_target_host: Mapped[str | None] = mapped_column(String(255), nullable=True)
 
     # Storage — ENCRYPTED file paths only. Private key content NEVER in the DB.
     cert_path: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -217,6 +223,14 @@ class Hook(Base, IntPkMixin, TimestampMixin):
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     is_default: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    # Optional SSH private key (Fernet-encrypted, never returned by the API)
+    # for scripts that SSH to a remote host to place/remove a challenge file
+    # (e.g. an authenticator.pl that runs `ssh -l root <host> ...` with no
+    # -i flag). Deployed as a scoped, temporary ssh_config Host entry for the
+    # duration of a single hook-driven issuance — see app/services/ssh_credentials.py.
+    ssh_private_key_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
+    ssh_target_host: Mapped[str | None] = mapped_column(String(255), nullable=True)
 
 
 class Backup(Base, IntPkMixin, TimestampMixin):

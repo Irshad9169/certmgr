@@ -9,10 +9,12 @@ from pydantic import BaseModel, Field
 from app.api.deps import CurrentUser, DbSession, get_client_ip, get_user_agent
 from app.core.exceptions import NotFoundError, ValidationAppError
 from app.core.logging import get_logger
+from app.core.security import encrypt_secret
 from app.models.certificate import Hook
 from app.models.enums import AuditResult, HookType
 from app.services.audit_service import record
 from app.services.command import assert_safe_script_path
+from app.services.ssh_credentials import assert_valid_private_key_pem
 
 logger = get_logger(__name__)
 router = APIRouter(prefix="/hooks", tags=["Hooks"])
@@ -29,6 +31,12 @@ class HookCreate(BaseModel):
     is_active: bool = True
     is_default: bool = False
     description: str | None = None
+    # Write-only: never echoed back. A Jenkins-credential-style secret for
+    # scripts that SSH to a remote host with no -i flag — see
+    # app/services/ssh_credentials.py. Omit/None leaves any existing key
+    # untouched on update; empty string clears it.
+    ssh_private_key: str | None = Field(default=None, exclude=True)
+    ssh_target_host: str | None = Field(default=None, max_length=255)
 
 
 @router.get("")
@@ -52,7 +60,11 @@ def create_hook(body: HookCreate, db: DbSession, user: CurrentUser, request: Req
         assert_safe_script_path(body.script_path, executable_required=True)
     except ValidationAppError as exc:
         raise ValidationAppError(f"Hook script invalid: {exc.message}") from exc
-    hook = Hook(**body.model_dump())
+    data = body.model_dump()
+    if body.ssh_private_key:
+        assert_valid_private_key_pem(body.ssh_private_key)
+        data["ssh_private_key_encrypted"] = encrypt_secret(body.ssh_private_key)
+    hook = Hook(**data)
     db.add(hook)
     db.commit()
     db.refresh(hook)
@@ -73,9 +85,20 @@ def update_hook(hook_id: int, body: dict[str, Any], db: DbSession, user: Current
     if hook is None:
         raise NotFoundError("Hook not found")
     for key in ("name", "hook_type", "script_path", "env_vars", "execution_user",
-                "working_directory", "timeout_seconds", "is_active", "is_default", "description"):
+                "working_directory", "timeout_seconds", "is_active", "is_default", "description",
+                "ssh_target_host"):
         if key in body:
             setattr(hook, key, body[key])
+    if "ssh_private_key" in body:
+        # Jenkins-credential-style semantics: key omitted from the PATCH body
+        # leaves the existing one untouched; empty string clears it;
+        # non-empty replaces it. Never echoed back — see _serialize().
+        raw = body["ssh_private_key"]
+        if raw:
+            assert_valid_private_key_pem(raw)
+            hook.ssh_private_key_encrypted = encrypt_secret(raw)
+        else:
+            hook.ssh_private_key_encrypted = None
     if body.get("script_path"):
         try:
             assert_safe_script_path(body["script_path"], executable_required=True)
@@ -112,5 +135,8 @@ def _serialize(h: Hook) -> dict[str, Any]:
         "execution_user": h.execution_user, "working_directory": h.working_directory,
         "timeout_seconds": h.timeout_seconds, "is_active": h.is_active,
         "is_default": h.is_default, "description": h.description,
+        # Never the decrypted key itself — only whether one is configured.
+        "has_ssh_key": bool(h.ssh_private_key_encrypted),
+        "ssh_target_host": h.ssh_target_host,
         "created_at": h.created_at.isoformat() if h.created_at else None,
     }
