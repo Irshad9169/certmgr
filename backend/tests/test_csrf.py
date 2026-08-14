@@ -38,19 +38,25 @@ def test_csrf_endpoint_sets_cookie(csrf_client):
     assert "certmgr_csrf" in resp.cookies
 
 
-def test_login_rejected_without_csrf(csrf_client):
+def test_login_without_csrf_header_reaches_auth_logic(csrf_client):
+    """/api/v1/auth/* is deliberately CSRF-exempt (middleware.py
+    _EXEMPT_PREFIXES) — login isn't CSRF-able in the first place (no
+    ambient-cookie auth to forge), so a missing X-CSRF-Token header must
+    not block it. The request reaches the real auth logic and is rejected
+    there instead (401, bad credentials), not by the CSRF layer (403)."""
     token, cookies = _get_csrf(csrf_client)
     resp = csrf_client.post(
         "/api/v1/auth/login",
         cookies=cookies,
         json={"username": "admin", "password": "wrong"},
     )
-    # no X-CSRF-Token header → CSRF rejection (403) takes precedence
-    assert resp.status_code == 403
-    assert "CSRF" in resp.text
+    assert resp.status_code == 401
+    assert resp.json()["error"]["code"] == "BAD_CREDENTIALS"
 
 
-def test_login_rejected_with_wrong_csrf(csrf_client):
+def test_login_with_wrong_csrf_header_reaches_auth_logic(csrf_client):
+    """Same exemption as above — an invalid CSRF header on a login request
+    is simply ignored, not rejected, since /api/v1/auth/* never enforces it."""
     token, cookies = _get_csrf(csrf_client)
     resp = csrf_client.post(
         "/api/v1/auth/login",
@@ -58,7 +64,8 @@ def test_login_rejected_with_wrong_csrf(csrf_client):
         headers={"X-CSRF-Token": "not-the-token"},
         json={"username": "admin", "password": "wrong"},
     )
-    assert resp.status_code == 403
+    assert resp.status_code == 401
+    assert resp.json()["error"]["code"] == "BAD_CREDENTIALS"
 
 
 def test_login_succeeds_with_valid_csrf(csrf_client):

@@ -91,9 +91,19 @@ export default function CertificatesPage() {
 
   const bulkMutation = useMutation({
     mutationFn: (action: 'renew' | 'revoke' | 'delete') =>
-      api.post('/certificates/bulk', { action, ids: selected, options: action === 'revoke' ? { reason: 'superseded' } : {} }),
-    onSuccess: () => {
-      setToast({ message: `Bulk ${bulkAction} queued for ${selected.length} certificate(s)`, severity: 'success' })
+      api.post<{ queued: number; failed: number }>('/certificates/bulk', {
+        action, ids: selected, options: action === 'revoke' ? { reason: 'superseded' } : {},
+      }),
+    onSuccess: (res) => {
+      const { queued, failed } = res.data
+      // The endpoint always returns 200 even when every item failed — it
+      // reports outcomes in the body, not via HTTP status — so this must be
+      // read explicitly rather than treating a 200 response as success.
+      setToast(
+        failed > 0
+          ? { message: `Bulk ${bulkAction}: ${queued} succeeded, ${failed} failed (check a certificate's execution history or the server logs for why)`, severity: queued > 0 ? 'success' : 'error' }
+          : { message: `Bulk ${bulkAction} queued for ${queued} certificate(s)`, severity: 'success' }
+      )
       setSelected([])
       qc.invalidateQueries({ queryKey: ['certificates'] })
     },
