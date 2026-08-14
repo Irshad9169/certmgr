@@ -17,7 +17,7 @@ from app.api.permissions import P_, has_permission
 from app.core.config import settings
 from app.core.exceptions import PermissionDeniedError, ValidationAppError
 from app.core.logging import get_logger
-from app.models.enums import AuditResult, JobTrigger
+from app.models.enums import AuditResult, JobTrigger, JobType
 from app.schemas.certificate import (
     CertificateOut,
     CloneRequest,
@@ -126,21 +126,37 @@ def _issue(body: IssueRequestSchema, db, user, request):
     ensure_not_maintenance(db, operation="certificate issuance")
     payload = body.model_dump()
 
-    cert = cert_service.issue_certificate(
-        db, payload=payload, user=user, trigger=JobTrigger.API.value,
-    )
-    # If issuance runs async (Celery), return the queued record immediately.
-    if not settings.celery_task_always_eager and cert.status == "issuing":
+    if settings.celery_task_always_eager:
+        cert = cert_service.issue_certificate(
+            db, payload=payload, user=user, trigger=JobTrigger.API.value,
+        )
         return {
             "certificate_id": cert.id,
-            "status": "queued",
-            "message": "Issuance queued — poll /certificates/{id} for status and "
-                       "/certificates/{id}/executions for live logs",
+            "status": cert.status,
+            "execution": _serialize_execution(getattr(cert, "extra_execution", None)),
         }
+
+    # Async path: create the row only (execute=False — no certbot invocation
+    # in this request), then hand off to the worker. Previously this branch
+    # was unreachable dead code: issue_certificate() always executed inline
+    # regardless of settings.celery_task_always_eager, so every UI-triggered
+    # issuance actually ran synchronously inside the certmgr-api process
+    # (whatever OS user that runs as) rather than on the worker — breaking
+    # sites where the worker is deliberately configured with elevated
+    # privileges certbot hooks need (see
+    # docs/administration.md#running-the-worker-as-root-for-root-only-hook-scripts)
+    # that the api process intentionally doesn't have.
+    cert = cert_service.issue_certificate(
+        db, payload=payload, user=user, trigger=JobTrigger.API.value, execute=False,
+    )
+    from app.tasks.celery_app import run_job_async
+
+    run_job_async(JobType.ISSUE.value, cert.id, user.id if user else None)
     return {
         "certificate_id": cert.id,
-        "status": cert.status,
-        "execution": _serialize_execution(getattr(cert, "extra_execution", None)),
+        "status": "queued",
+        "message": "Issuance queued — poll /certificates/{id} for status and "
+                   "/certificates/{id}/executions for live logs",
     }
 
 
