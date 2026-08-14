@@ -701,14 +701,26 @@ _DELETABLE_STATUSES = {
 
 
 def delete_certificate(db: Session, certificate_id: int, *, user: User | None = None) -> None:
-    """Permanently remove a certificate row (failed/revoked/archived only —
-    never active/issuing/renewing, to avoid deleting something still in use).
+    """Permanently remove a certificate row.
+
+    Platform-managed (CertMgr-issued) certificates: failed/revoked/archived
+    only — never active/issuing/renewing, to avoid deleting something the
+    platform's own renewal automation still relies on.
+
+    Imported/discovered certificates: deletable regardless of status.
+    CertMgr was never the issuing/renewal authority for these — the row is
+    just a tracking record, so removing it only stops CertMgr from
+    monitoring it, never touches the actual certificate wherever it's
+    really deployed. Also records the fingerprint in discovery_ignores so
+    a future discovery scan doesn't just re-import the same file again
+    (see app/services/discovery_service.py).
+
     Related rows (domains, executions, deployments, backups, health checks,
     tags) cascade at the DB level; every FK referencing certificates.id
     already has an explicit ON DELETE CASCADE/SET NULL (see the initial
     schema migration), so no explicit cleanup is needed for those."""
     cert = get_certificate(db, certificate_id, load_relations=False)
-    if cert.status not in _DELETABLE_STATUSES:
+    if not cert.imported and cert.status not in _DELETABLE_STATUSES:
         raise ValidationAppError(
             f"Cannot delete a certificate with status '{cert.status}' — "
             "only failed, revoked or archived certificates can be deleted. "
@@ -719,6 +731,22 @@ def delete_certificate(db: Session, certificate_id: int, *, user: User | None = 
             storage_module.get_file_store().delete_cert_material(cert.fingerprint_sha256)
         except Exception as exc:  # noqa: BLE001
             logger.warning("File cleanup during delete failed: %s", exc)
+
+    if cert.imported and cert.fingerprint_sha256:
+        from app.models.job import DiscoveryIgnore
+
+        already_ignored = (
+            db.query(DiscoveryIgnore)
+            .filter(DiscoveryIgnore.fingerprint_sha256 == cert.fingerprint_sha256)
+            .first()
+        )
+        if already_ignored is None:
+            db.add(DiscoveryIgnore(
+                fingerprint_sha256=cert.fingerprint_sha256,
+                domain=cert.domain,
+                source_path=cert.cert_path,
+                ignored_by=user.id if user else None,
+            ))
 
     domain, cert_status = cert.domain, cert.status
     db.delete(cert)
@@ -846,7 +874,7 @@ def _load_key(data: bytes, password: str | None):
     return parse_private_key(data, password.encode() if password else None)
 
 
-def _assert_importable_path(path: str) -> Path:
+def _assert_importable_path(db: Session, path: str) -> Path:
     """Reject paths outside the admin-configured discovery scan roots.
 
     import_from_paths lets an authenticated user point the server at an
@@ -858,7 +886,7 @@ def _assert_importable_path(path: str) -> Path:
     from app.services.discovery_service import settings_scan_paths
 
     resolved = Path(path).resolve()
-    for root in settings_scan_paths():
+    for root in settings_scan_paths(db):
         root_resolved = Path(root).resolve()
         if resolved == root_resolved or root_resolved in resolved.parents:
             return resolved
@@ -868,9 +896,9 @@ def _assert_importable_path(path: str) -> Path:
 def import_from_paths(db: Session, *, cert_path: str, key_path: str | None = None,
                       chain_path: str | None = None, payload: dict | None = None,
                       user: User | None = None) -> Certificate:
-    cert_data = _assert_importable_path(cert_path).read_bytes()
-    key_data = _assert_importable_path(key_path).read_bytes() if key_path else None
-    chain_data = _assert_importable_path(chain_path).read_bytes() if chain_path else None
+    cert_data = _assert_importable_path(db, cert_path).read_bytes()
+    key_data = _assert_importable_path(db, key_path).read_bytes() if key_path else None
+    chain_data = _assert_importable_path(db, chain_path).read_bytes() if chain_path else None
     return import_certificate(
         db, cert_data=cert_data, key_data=key_data, chain_data=chain_data,
         payload=payload, user=user,

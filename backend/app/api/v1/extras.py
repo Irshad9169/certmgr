@@ -59,6 +59,42 @@ def discovery_runs(db: DbSession, user: CurrentUser, limit: int = Query(20, ge=1
     ]
 
 
+@discovery_router.get("/ignored")
+def list_discovery_ignores(db: DbSession, user: CurrentUser):
+    """Certificates deliberately deleted from tracking — future discovery
+    scans skip these fingerprints instead of re-importing the same file."""
+    from app.models.job import DiscoveryIgnore
+
+    rows = db.query(DiscoveryIgnore).order_by(DiscoveryIgnore.created_at.desc()).all()
+    return [
+        {
+            "id": r.id, "fingerprint_sha256": r.fingerprint_sha256, "domain": r.domain,
+            "source_path": r.source_path,
+            "created_at": r.created_at.isoformat() if r.created_at else None,
+        }
+        for r in rows
+    ]
+
+
+@discovery_router.delete("/ignored/{ignore_id}")
+def delete_discovery_ignore(ignore_id: int, db: DbSession, user: CurrentUser, request: Request):
+    """Un-ignore a fingerprint — the next discovery scan will import it
+    again if the file is still present on disk."""
+    if not has_permission(user.role_name.value, P_["discovery"]["run"]):
+        raise PermissionDeniedError("You are not authorized to manage discovery")
+    from app.models.job import DiscoveryIgnore
+
+    row = db.query(DiscoveryIgnore).filter(DiscoveryIgnore.id == ignore_id).first()
+    if row is None:
+        raise NotFoundError("Ignored fingerprint not found")
+    db.delete(row)
+    record(db, action="discovery.unignore", user_id=user.id, username=user.username,
+           resource_type="discovery_ignore", resource_id=ignore_id, result=AuditResult.SUCCESS,
+           ip_address=get_client_ip(request), user_agent=get_user_agent(request))
+    db.commit()
+    return {"ok": True}
+
+
 # ═══════════════════════════════════════════════════════════════════════════
 # Health
 # ═══════════════════════════════════════════════════════════════════════════

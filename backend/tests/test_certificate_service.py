@@ -207,14 +207,55 @@ def test_delete_revoked_certificate(db, sample_certificate, admin_user):
         get_certificate(db, cert_id)
 
 
-def test_delete_active_certificate_rejected(db, sample_certificate):
-    cert = import_certificate(db, cert_data=sample_certificate["cert_pem"],
-                              key_data=sample_certificate["key_pem"])
+def test_delete_active_platform_managed_certificate_rejected(db, admin_user, monkeypatch, tmp_path):
+    """Platform-managed (CertMgr-issued) certs keep the original guard —
+    deleting one CertMgr's own renewal automation might still rely on stays
+    blocked while active."""
+    from app.services.providers.letsencrypt import LetsEncryptProvider
+
+    cert_obj, cert_pem, key_pem = _generate_self_signed(["managed.example.com"])
+    cert_file = tmp_path / "cert.pem"
+    cert_file.write_bytes(cert_pem)
+
+    def fake_issue(self, request):
+        return IssueResult(success=True, cert_path=str(cert_file), cert_name="managed.example.com",
+                           exit_code=0, stdout="", stderr="")
+
+    monkeypatch.setattr(LetsEncryptProvider, "issue", fake_issue)
+    cert = issue_certificate(
+        db, payload={"domains": ["managed.example.com"], "validation_method": "http-01",
+                     "key_type": "rsa2048", "email": "ops@corp.com"},
+        user=admin_user,
+    )
     assert cert.status == "active"
+    assert cert.imported is False
     with pytest.raises(ValidationAppError):
         delete_certificate(db, cert.id)
     # Row must still exist — rejection shouldn't have deleted anything.
     assert get_certificate(db, cert.id) is not None
+
+
+def test_delete_active_imported_certificate_allowed_and_ignored(db, sample_certificate, admin_user):
+    """Imported/discovered certs are just tracking records — CertMgr was
+    never their issuing/renewal authority, so they're deletable regardless
+    of status, and get remembered in discovery_ignores so a future scan
+    doesn't just re-import the same file (see discovery_service.py)."""
+    from app.models.job import DiscoveryIgnore
+
+    cert = import_certificate(db, cert_data=sample_certificate["cert_pem"],
+                              key_data=sample_certificate["key_pem"])
+    assert cert.status == "active"
+    assert cert.imported is True
+    fingerprint, domain = cert.fingerprint_sha256, cert.domain
+
+    delete_certificate(db, cert.id, user=admin_user)
+
+    with pytest.raises(NotFoundError):
+        get_certificate(db, cert.id)
+
+    ignore_row = db.query(DiscoveryIgnore).filter(DiscoveryIgnore.fingerprint_sha256 == fingerprint).first()
+    assert ignore_row is not None
+    assert ignore_row.domain == domain
 
 
 def test_async_issuance_reconstructs_persisted_hook_config(db, admin_user, monkeypatch, tmp_path):

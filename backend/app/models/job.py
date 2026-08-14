@@ -65,6 +65,25 @@ class DiscoveryRun(Base, IntPkMixin):
     created_by: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
 
+class DiscoveryIgnore(Base, IntPkMixin, TimestampMixin):
+    """Fingerprints of certificates deliberately removed from tracking.
+
+    run_discovery() computes its "already seen" set fresh from the current
+    certificates table on every run, so deleting a discovered certificate's
+    row alone doesn't stop it from being re-imported the next scan finds the
+    same file on disk (e.g. an OS-default self-signed cert under a default
+    scan path). Deleting an imported certificate records its fingerprint
+    here so future runs skip it too.
+    """
+
+    __tablename__ = "discovery_ignores"
+
+    fingerprint_sha256: Mapped[str] = mapped_column(String(96), unique=True, nullable=False, index=True)
+    domain: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    source_path: Mapped[str | None] = mapped_column(Text, nullable=True)
+    ignored_by: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+
 class ScheduledJob(Base, IntPkMixin, TimestampMixin):
     """User-configurable scheduled jobs (discovery, renewal, compliance…)."""
 

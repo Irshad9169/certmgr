@@ -14,7 +14,7 @@ from app.core.logging import get_logger
 from app.core.timeutils import utcnow
 from app.models.certificate import Certificate
 from app.models.enums import AuditResult, JobStatus, JobTrigger, JobType
-from app.models.job import DiscoveryRun, JobExecution
+from app.models.job import DiscoveryIgnore, DiscoveryRun, JobExecution
 from app.services.audit_service import record
 from app.services.certificate_service import import_from_paths
 from app.services.x509_utils import parse_certificate, parse_pfx
@@ -36,20 +36,20 @@ _KEY_EXTS = (".pem", ".key")
 _PFX_EXTS = (".pfx", ".p12")
 
 
-def _paths_from_settings(extra: list[str] | None = None) -> list[str]:
-    paths = list(settings_scan_paths())
+def _paths_from_settings(db: Session | None, extra: list[str] | None = None) -> list[str]:
+    paths = list(settings_scan_paths(db))
     for p in extra or []:
         if p not in paths:
             paths.append(p)
     return paths
 
 
-def settings_scan_paths() -> list[str]:
+def settings_scan_paths(db: Session | None = None) -> list[str]:
     """Scan paths from app settings (admin configurable), else defaults."""
     from app.services.settings_service import get_setting
 
     try:
-        raw = get_setting("discovery.scan_paths")
+        raw = get_setting(db, "discovery.scan_paths")
         if raw:
             return [p.strip() for p in raw.split(",") if p.strip()]
     except Exception:  # noqa: BLE001, S110 — fall back to defaults if settings unreadable
@@ -62,15 +62,21 @@ def run_discovery(db: Session, *, extra_paths: list[str] | None = None,
     run = DiscoveryRun(
         started_at=utcnow(),
         status="running",
-        scan_paths=_paths_from_settings(extra_paths),
+        scan_paths=_paths_from_settings(db, extra_paths),
         created_by=created_by,
     )
     db.add(run)
     db.commit()
 
     logs: list[str] = []
-    found = imported = skipped = 0
+    found = 0
     seen_fingerprints = {c.fingerprint_sha256 for c in db.query(Certificate).all() if c.fingerprint_sha256}
+    # Certificates a user deliberately deleted from tracking (see
+    # certificate_service.delete_certificate) must stay gone — without this,
+    # the next scan just re-imports the same file it found before.
+    seen_fingerprints |= {
+        i.fingerprint_sha256 for i in db.query(DiscoveryIgnore).all()
+    }
 
     for base in run.scan_paths:
         root = Path(base)
@@ -79,10 +85,10 @@ def run_discovery(db: Session, *, extra_paths: list[str] | None = None,
             continue
         found += _walk(root, run, db, seen_fingerprints, logs)
 
-    # post-pass: count
+    # run.imported_count / run.skipped_count are already correct here —
+    # _maybe_import_cert()/_maybe_import_pfx() increment them in place on
+    # `run` as they go.
     run.found_count = found
-    run.imported_count = imported if imported else _count_imported(db, run)
-    run.skipped_count = skipped if skipped else _count_skipped(db, run)
     run.status = "completed"
     run.finished_at = utcnow()
     run.log = "\n".join(logs[-500:]) or "No certificates found."
@@ -97,14 +103,6 @@ def run_discovery(db: Session, *, extra_paths: list[str] | None = None,
            result=AuditResult.SUCCESS, details={"found": run.found_count, "imported": run.imported_count})
     db.commit()
     return run
-
-
-def _count_imported(db, run) -> int:
-    return 0
-
-
-def _count_skipped(db, run) -> int:
-    return 0
 
 
 def _walk(root: Path, run: DiscoveryRun, db: Session, seen: set[str], logs: list[str]) -> int:

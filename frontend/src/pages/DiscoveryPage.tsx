@@ -5,6 +5,7 @@ import {
   Button,
   Card,
   CardContent,
+  IconButton,
   Paper,
   Table,
   TableBody,
@@ -13,9 +14,11 @@ import {
   TableHead,
   TableRow,
   TextField,
+  Tooltip,
   Typography,
 } from '@mui/material'
 import TravelExploreIcon from '@mui/icons-material/TravelExplore'
+import RestoreIcon from '@mui/icons-material/Restore'
 import { api, apiErrorMessage } from '../lib/api'
 import { EmptyState, ErrorBox, Loading, PageHeader, StatusChip, Toast } from '../components/Shared'
 import { useAuth } from '../lib/auth-context'
@@ -32,6 +35,14 @@ interface DiscoveryRun {
   finished_at?: string
 }
 
+interface DiscoveryIgnore {
+  id: number
+  fingerprint_sha256: string
+  domain: string | null
+  source_path: string | null
+  created_at?: string
+}
+
 export default function DiscoveryPage() {
   const { can } = useAuth()
   const qc = useQueryClient()
@@ -41,6 +52,20 @@ export default function DiscoveryPage() {
   const { data, isLoading, error, refetch } = useQuery({
     queryKey: ['discovery-runs'],
     queryFn: () => api.get<DiscoveryRun[]>('/discovery/runs').then((r) => r.data),
+  })
+
+  const { data: ignored } = useQuery({
+    queryKey: ['discovery-ignored'],
+    queryFn: () => api.get<DiscoveryIgnore[]>('/discovery/ignored').then((r) => r.data),
+  })
+
+  const unignore = useMutation({
+    mutationFn: (id: number) => api.delete(`/discovery/ignored/${id}`),
+    onSuccess: () => {
+      setToast({ message: 'Removed from ignore list — the next scan may re-import it', severity: 'success' })
+      qc.invalidateQueries({ queryKey: ['discovery-ignored'] })
+    },
+    onError: (e) => setToast({ message: apiErrorMessage(e), severity: 'error' }),
   })
 
   const run = useMutation({
@@ -83,6 +108,48 @@ export default function DiscoveryPage() {
           />
         </CardContent>
       </Card>
+
+      {ignored && ignored.length > 0 && (
+        <Card sx={{ mb: 2 }}>
+          <CardContent>
+            <Typography variant="subtitle2" gutterBottom>
+              Ignored certificates ({ignored.length}) — deleted from tracking; future scans skip these
+            </Typography>
+            <TableContainer component={Paper} variant="outlined">
+              <Table size="small">
+                <TableHead>
+                  <TableRow>
+                    <TableCell>Domain</TableCell>
+                    <TableCell>Source path</TableCell>
+                    <TableCell>Ignored</TableCell>
+                    <TableCell align="right">Actions</TableCell>
+                  </TableRow>
+                </TableHead>
+                <TableBody>
+                  {ignored.map((i) => (
+                    <TableRow key={i.id}>
+                      <TableCell>{i.domain ?? '—'}</TableCell>
+                      <TableCell>
+                        <Typography variant="caption" sx={{ fontFamily: 'monospace' }}>{i.source_path ?? '—'}</Typography>
+                      </TableCell>
+                      <TableCell>{i.created_at ? new Date(i.created_at).toLocaleString() : '—'}</TableCell>
+                      <TableCell align="right">
+                        {can('discovery:run') && (
+                          <Tooltip title="Un-ignore — the next scan may re-import it">
+                            <IconButton size="small" onClick={() => unignore.mutate(i.id)}>
+                              <RestoreIcon fontSize="small" />
+                            </IconButton>
+                          </Tooltip>
+                        )}
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </TableContainer>
+          </CardContent>
+        </Card>
+      )}
 
       {isLoading ? (
         <Loading />
