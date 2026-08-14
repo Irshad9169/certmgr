@@ -36,6 +36,20 @@ import type { Certificate, Page } from '../types'
 import { ConfirmDialog, EmptyState, ErrorBox, Loading, PageHeader, StatusChip, Toast, daysColor } from '../components/Shared'
 import { useAuth } from '../lib/auth-context'
 
+/** Friendly issuer label for the compact list view — prefers the CA's
+ * organization name (e.g. "Let's Encrypt") or common name over the raw DN
+ * string; the full DN is still available via the cell's tooltip. */
+function issuerLabel(issuer?: string | null): string {
+  if (!issuer) return '—'
+  const attrs: Record<string, string> = {}
+  for (const part of issuer.split(',')) {
+    const eq = part.indexOf('=')
+    if (eq === -1) continue
+    attrs[part.slice(0, eq).trim()] = part.slice(eq + 1).trim()
+  }
+  return attrs.organizationName || attrs.commonName || issuer
+}
+
 interface Filters {
   search: string
   status: string
@@ -276,7 +290,7 @@ export default function CertificatesPage() {
                   <TableCell>
                     <Tooltip title={cert.issuer ?? ''}>
                       <Typography variant="caption" sx={{ display: 'block', maxWidth: 220, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                        {cert.issuer || '—'}
+                        {issuerLabel(cert.issuer)}
                       </Typography>
                     </Tooltip>
                   </TableCell>
