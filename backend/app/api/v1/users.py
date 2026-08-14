@@ -22,7 +22,7 @@ ADMIN = P_["admin"]["users"]
 
 @router.get("")
 def list_users(db: DbSession, user: CurrentUser, search: str | None = Query(None, max_length=100),
-               page: int = Query(1, ge=1), page_size: int = Query(25, ge=1, le=200)):
+               page: int = Query(1, ge=1), page_size: int = Query(25, ge=1, le=500)):
     from app.api.permissions import has_permission
     from app.core.exceptions import PermissionDeniedError
 

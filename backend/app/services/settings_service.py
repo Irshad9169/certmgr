@@ -69,20 +69,24 @@ def get_setting(db: Session | None, key: str) -> str | None:
             session.close()
 
 
-def get_all_settings(db: Session) -> dict[str, dict[str, Any]]:
-    """Return settings with secrets masked (admin UI shows '•••set•••')."""
-    out: dict[str, dict[str, Any]] = {}
+def get_all_settings(db: Session) -> list[dict[str, Any]]:
+    """Return settings with secrets masked (admin UI shows '•••set•••').
+
+    A list, not a dict keyed by setting name — the frontend renders this
+    directly as a table via .map(), which a dict shape doesn't support.
+    """
+    out: list[dict[str, Any]] = []
     rows = db.query(AppSetting).all()
     for key, (default, is_secret, description) in DEFAULT_SETTINGS.items():
         row = next((r for r in rows if r.key == key), None)
         value = row.value if row else (default or "")
-        out[key] = {
+        out.append({
             "key": key,
             "value": ("[SET]" if (row and row.value) else "") if is_secret else (value or ""),
             "is_secret": is_secret,
             "description": description,
             "configured": row is not None and bool(row.value),
-        }
+        })
     return out
 
 

@@ -22,7 +22,7 @@ SERVER = P_["server"]
 @router.get("")
 def list_servers(db: DbSession, user: CurrentUser, search: str | None = Query(None, max_length=200),
                  environment: str | None = None, page: int = Query(1, ge=1),
-                 page_size: int = Query(25, ge=1, le=200)):
+                 page_size: int = Query(25, ge=1, le=1000)):
     rows, total = server_service.list_servers(db, search=search, environment=environment,
                                               page=page, page_size=page_size)
     return {
