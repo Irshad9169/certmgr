@@ -44,7 +44,7 @@ def retry_execution(db: Session, execution_id: int, *, user=None) -> JobExecutio
         row.retry_count = (row.retry_count or 0) + 1
         row.error_message = None
         db.commit()
-        run_job_async.delay("issue", row.certificate_id, user.id if user else None, execution_id)
+        run_job_async("issue", row.certificate_id, user.id if user else None, execution_id)
         return row
     if row.job_type == "renew" and row.certificate_id:
         from app.services.certificate_service import renew_certificate

@@ -937,7 +937,7 @@ def bulk_action(db: Session, *, action: str, ids: list[int], user: User | None =
             if settings.celery_task_always_eager:
                 _bulk_execute(db, action, cert_id, user, options)
             else:
-                run_bulk_async.delay(action, cert_id, user.id if user else None, options)
+                run_bulk_async(action, cert_id, user.id if user else None, options)
             queued += 1
         except Exception as exc:  # noqa: BLE001
             logger.warning("Bulk %s failed for cert %s: %s", action, cert_id, exc)

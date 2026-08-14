@@ -11,6 +11,7 @@ from conftest import _build_pfx, _generate_self_signed  # noqa: F401
 from app.core.exceptions import ConflictError, NotFoundError, ValidationAppError
 from app.services import storage
 from app.services.certificate_service import (
+    bulk_action,
     delete_certificate,
     export_bundle,
     get_certificate,
@@ -329,3 +330,36 @@ def test_async_issuance_reconstructs_persisted_hook_config(db, admin_user, monke
     assert request.hook_timeout == 120
     assert request.ssh_target_host == "lets-encrypt01.example.com"
     assert request.ssh_private_key_encrypted == cert.ssh_private_key_encrypted
+
+
+def test_bulk_action_non_eager_dispatches_without_calling_delay_on_a_plain_function(
+    db, sample_certificate, admin_user, monkeypatch,
+):
+    """Regression test: bulk_action()'s non-eager branch called
+    `run_bulk_async.delay(...)`, but run_bulk_async is a plain Python
+    function (not a Celery task) whose own job is to call .delay() on the
+    real underlying task — it has no .delay attribute itself. Every bulk
+    action (renew/revoke/deploy/delete) hit `'function' object has no
+    attribute 'delay'` in any real (non-eager) deployment; the test suite
+    never caught it because it always runs with
+    CERTMGR_CELERY_TASK_ALWAYS_EAGER=true, so this branch was never
+    exercised."""
+    from app.core.config import settings
+
+    cert = import_certificate(db, cert_data=sample_certificate["cert_pem"],
+                              key_data=sample_certificate["key_pem"])
+    cert.status = "revoked"
+    db.commit()
+
+    calls = []
+
+    def fake_run_bulk_async(action, certificate_id, user_id, options=None):
+        calls.append((action, certificate_id, user_id, options))
+
+    monkeypatch.setattr("app.tasks.celery_app.run_bulk_async", fake_run_bulk_async)
+    monkeypatch.setattr(settings, "celery_task_always_eager", False)
+
+    result = bulk_action(db, action="delete", ids=[cert.id], user=admin_user)
+
+    assert result == {"queued": 1, "failed": 0}
+    assert calls == [("delete", cert.id, admin_user.id, {})]
