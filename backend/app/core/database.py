@@ -7,7 +7,8 @@ tests/CI. All JSON columns and enums are stored in a PostgreSQL-compatible way.
 
 from __future__ import annotations
 
-from collections.abc import Generator
+from collections.abc import Generator, Iterator
+from contextlib import contextmanager
 from pathlib import Path
 
 from sqlalchemy import create_engine, event
@@ -82,8 +83,15 @@ def get_db() -> Generator[Session]:
         db.close()
 
 
-def session_scope() -> Generator[Session]:
-    """Context-manager style session for services/tasks (commits on success)."""
+@contextmanager
+def session_scope() -> Iterator[Session]:
+    """Context-manager style session for services/tasks (commits on success).
+
+    Must be @contextmanager-decorated (unlike get_db() above, which FastAPI
+    consumes as a raw generator via Depends()) — every Celery task uses this
+    via `with session_scope() as db:`, which requires an actual context
+    manager object, not a bare generator.
+    """
     db = SessionLocal()
     try:
         yield db
