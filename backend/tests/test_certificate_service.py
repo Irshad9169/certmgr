@@ -215,3 +215,67 @@ def test_delete_active_certificate_rejected(db, sample_certificate):
         delete_certificate(db, cert.id)
     # Row must still exist — rejection shouldn't have deleted anything.
     assert get_certificate(db, cert.id) is not None
+
+
+def test_async_issuance_reconstructs_persisted_hook_config(db, admin_user, monkeypatch, tmp_path):
+    """Regression test: async/queued issuance only ever gets a certificate_id
+    (see app/tasks/certificates.py), not the original request payload, so
+    hooks/webroot/standalone/email must round-trip through the Certificate
+    row itself. Exercises the exact `_execute_issuance(db, cert, None, ...,
+    payload=None)` call the Celery task makes."""
+    from app.models.certificate import Hook
+    from app.services.certificate_service import _execute_issuance
+    from app.services.providers.letsencrypt import LetsEncryptProvider
+
+    auth_hook = Hook(name="auth-hook", hook_type="auth", script_path="/opt/hooks/auth.pl",
+                     execution_user="hookuser", working_directory="/opt/hooks", timeout_seconds=120)
+    cleanup_hook = Hook(name="cleanup-hook", hook_type="cleanup", script_path="/opt/hooks/cleanup.pl",
+                        env_vars={"HOOK_TOKEN": "abc"})
+    db.add_all([auth_hook, cleanup_hook])
+    db.flush()
+
+    cert = issue_certificate(
+        db, payload={
+            "domains": ["hooked.example.com"],
+            "validation_method": "manual-http",
+            "key_type": "rsa2048",
+            "email": "ops@corp.com",
+            "auth_hook_id": auth_hook.id,
+            "cleanup_hook_id": cleanup_hook.id,
+        },
+        user=admin_user,
+        execute=False,
+    )
+
+    # Row must carry everything needed to reconstruct the request later.
+    assert cert.email == "ops@corp.com"
+    assert cert.auth_hook_path == "/opt/hooks/auth.pl"
+    assert cert.cleanup_hook_path == "/opt/hooks/cleanup.pl"
+    assert cert.hook_env == {"HOOK_TOKEN": "abc"}
+    assert cert.hook_execution_user == "hookuser"
+    assert cert.hook_working_directory == "/opt/hooks"
+    assert cert.hook_timeout == 120
+
+    _cert_obj, cert_pem, _key_pem = _generate_self_signed(["hooked.example.com"])
+    cert_file = tmp_path / "cert.pem"
+    cert_file.write_bytes(cert_pem)
+
+    captured = {}
+
+    def fake_issue(self, request):
+        captured["request"] = request
+        return IssueResult(success=True, cert_path=str(cert_file), cert_name="hooked.example.com",
+                           exit_code=0, stdout="", stderr="")
+
+    monkeypatch.setattr(LetsEncryptProvider, "issue", fake_issue)
+
+    _execute_issuance(db, cert, None, "manual")
+
+    request = captured["request"]
+    assert request.email == "ops@corp.com"
+    assert request.auth_hook == "/opt/hooks/auth.pl"
+    assert request.cleanup_hook == "/opt/hooks/cleanup.pl"
+    assert request.hook_env == {"HOOK_TOKEN": "abc"}
+    assert request.hook_execution_user == "hookuser"
+    assert request.hook_working_directory == "/opt/hooks"
+    assert request.hook_timeout == 120

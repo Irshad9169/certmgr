@@ -283,6 +283,18 @@ def issue_certificate(
     cert_name = payload.get("cert_name") or _default_cert_name(payload.get("domains", []))
     # Note: re-issuance of an existing domain is permitted; duplicates are
     # handled at fingerprint level during import/ingest.
+    method = payload.get("validation_method", ValidationMethod.HTTP_01.value)
+
+    # Resolve hooks now (not just at execution time) so async/queued issuance
+    # — which only gets a certificate_id, not this payload — can reconstruct
+    # the exact same certbot invocation from the persisted row.
+    auth_hook = cleanup_hook = None
+    hook_env: dict[str, str] = {}
+    hook_user = hook_cwd = hook_timeout = None
+    if method in _HOOKED_METHODS or payload.get("auth_hook_id") or payload.get("cleanup_hook_id"):
+        hook = _resolve_hooks(db, payload)
+        if hook:
+            auth_hook, cleanup_hook, hook_env, hook_user, hook_cwd, hook_timeout = hook
 
     cert = Certificate(
         domain=payload["domains"][0].lower().rstrip("."),
@@ -292,7 +304,7 @@ def issue_certificate(
         cert_type=_cert_type_for(payload["domains"]),
         environment=payload.get("environment", settings.default_environment),
         provider_name=payload.get("provider", "letsencrypt"),
-        validation_method=payload.get("validation_method", ValidationMethod.HTTP_01.value),
+        validation_method=method,
         key_type=payload.get("key_type", KeyType.RSA_2048.value),
         status=CertificateStatus.ISSUING.value,
         auto_renew=payload.get("auto_renew", True),
@@ -302,6 +314,15 @@ def issue_certificate(
         owner_id=payload.get("owner_id") or (user.id if user else None),
         notes=payload.get("notes"),
         managed_by_platform=True,
+        email=payload.get("email"),
+        webroot_path=payload.get("webroot_path"),
+        standalone_port=payload.get("standalone_port"),
+        auth_hook_path=auth_hook,
+        cleanup_hook_path=cleanup_hook,
+        hook_env=hook_env or None,
+        hook_execution_user=hook_user,
+        hook_working_directory=hook_cwd,
+        hook_timeout=hook_timeout,
     )
     db.add(cert)
     db.flush()
@@ -393,15 +414,12 @@ def _execute_issuance(db: Session, cert: Certificate, user: User | None,
         db.commit()
         return execution
 
-    if payload is None:
+    reconstructed = payload is None
+    if reconstructed:
         # Async path (Celery task only has certificate_id, not the original
-        # in-memory payload) — reconstruct from the persisted row. NOTE: the
-        # Certificate model has no columns for webroot_path/standalone_port/
-        # auth_hook/cleanup_hook/hook_env/a caller-supplied email, so queued
-        # issuance for webroot/standalone/custom/manual-* validation methods
-        # will lose that configuration here. Use
-        # CERTMGR_CELERY_TASK_ALWAYS_EAGER=true (synchronous) for those until
-        # this is persisted properly.
+        # in-memory payload) — reconstruct from the persisted row, which
+        # issue_certificate() populated with the resolved hook/webroot/
+        # standalone/email configuration at creation time.
         payload = {
             "domains": [cert.domain] + [d for d in cert.sans if d != cert.domain],
             "validation_method": cert.validation_method,
@@ -409,8 +427,22 @@ def _execute_issuance(db: Session, cert: Certificate, user: User | None,
             "environment": cert.environment,
             "staging": cert.staging,
             "dry_run": cert.dry_run,
+            "email": cert.email,
+            "webroot_path": cert.webroot_path,
+            "standalone_port": cert.standalone_port,
+            "auth_hook": cert.auth_hook_path,
+            "cleanup_hook": cert.cleanup_hook_path,
+            "hook_env": cert.hook_env or {},
         }
     request = build_issue_request(db, payload, cert_name=cert.cert_name)
+    if reconstructed and (cert.auth_hook_path or cert.cleanup_hook_path):
+        # _resolve_hooks() has no hook_id to look up here, so it can't
+        # re-derive execution_user/working_directory/timeout from the bare
+        # persisted path — restore them from what issue_certificate()
+        # captured at creation time.
+        request.hook_execution_user = cert.hook_execution_user
+        request.hook_working_directory = cert.hook_working_directory
+        request.hook_timeout = cert.hook_timeout or request.hook_timeout
     request.email = request.email or settings.default_letsencrypt_email
 
     result = provider.issue(request)

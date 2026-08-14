@@ -128,6 +128,23 @@ class Certificate(Base, IntPkMixin, TimestampMixin):
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
     favorite: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
 
+    # Issuance configuration — persisted so async/queued issuance (which only
+    # has the certificate row to work from, not the original request) and a
+    # future renewal can reconstruct the exact same certbot invocation. Hook
+    # paths are stored already-resolved (not a Hook.id) so a later edit/
+    # deletion of the Hook row doesn't change what an in-flight or historical
+    # issuance actually used — same principle certbot's own renewal config
+    # uses for hooks baked in at issuance time.
+    email: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    webroot_path: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    standalone_port: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    auth_hook_path: Mapped[str | None] = mapped_column(Text, nullable=True)
+    cleanup_hook_path: Mapped[str | None] = mapped_column(Text, nullable=True)
+    hook_env: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    hook_execution_user: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    hook_working_directory: Mapped[str | None] = mapped_column(Text, nullable=True)
+    hook_timeout: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
     # Storage — ENCRYPTED file paths only. Private key content NEVER in the DB.
     cert_path: Mapped[str | None] = mapped_column(Text, nullable=True)
     key_path: Mapped[str | None] = mapped_column(Text, nullable=True)
