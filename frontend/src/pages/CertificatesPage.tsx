@@ -30,6 +30,7 @@ import AutorenewIcon from '@mui/icons-material/Autorenew'
 import BlockIcon from '@mui/icons-material/Block'
 import StarIcon from '@mui/icons-material/Star'
 import StarBorderIcon from '@mui/icons-material/StarBorder'
+import DeleteForeverIcon from '@mui/icons-material/DeleteForever'
 import { api, apiErrorMessage } from '../lib/api'
 import type { Certificate, Page } from '../types'
 import { ConfirmDialog, EmptyState, ErrorBox, Loading, PageHeader, StatusChip, Toast, daysColor } from '../components/Shared'
@@ -56,7 +57,7 @@ export default function CertificatesPage() {
     search: '', status: '', environment: '', provider: '', key_type: '', auto_renew: '',
   })
   const [selected, setSelected] = useState<number[]>([])
-  const [bulkAction, setBulkAction] = useState<null | 'renew' | 'revoke'>(null)
+  const [bulkAction, setBulkAction] = useState<null | 'renew' | 'revoke' | 'delete'>(null)
   const [toast, setToast] = useState<{ message: string; severity: 'success' | 'error' } | null>(null)
 
   const params = useMemo(() => ({
@@ -75,7 +76,7 @@ export default function CertificatesPage() {
   })
 
   const bulkMutation = useMutation({
-    mutationFn: (action: 'renew' | 'revoke') =>
+    mutationFn: (action: 'renew' | 'revoke' | 'delete') =>
       api.post('/certificates/bulk', { action, ids: selected, options: action === 'revoke' ? { reason: 'superseded' } : {} }),
     onSuccess: () => {
       setToast({ message: `Bulk ${bulkAction} queued for ${selected.length} certificate(s)`, severity: 'success' })
@@ -117,6 +118,11 @@ export default function CertificatesPage() {
                   Revoke ({selected.length})
                 </Button>
               </>
+            )}
+            {can('certificate:delete') && selected.length > 0 && (
+              <Button color="error" startIcon={<DeleteForeverIcon />} onClick={() => setBulkAction('delete')}>
+                Delete ({selected.length})
+              </Button>
             )}
             <Button startIcon={<RefreshIcon />} onClick={() => refetch()} disabled={isFetching}>
               Refresh
@@ -340,6 +346,15 @@ export default function CertificatesPage() {
         confirmLabel="Revoke"
         danger
         onConfirm={() => bulkMutation.mutate('revoke')}
+        onClose={() => setBulkAction(null)}
+      />
+      <ConfirmDialog
+        open={bulkAction === 'delete'}
+        title={`Permanently delete ${selected.length} certificate(s)?`}
+        body="Removes the certificate record and material (if any) entirely — immediate and irreversible. Only failed, revoked, or archived certificates can be deleted; any active/in-progress ones selected will be skipped and reported as failed."
+        confirmLabel="Delete"
+        danger
+        onConfirm={() => bulkMutation.mutate('delete')}
         onClose={() => setBulkAction(null)}
       />
       <Toast toast={toast} onClose={() => setToast(null)} />

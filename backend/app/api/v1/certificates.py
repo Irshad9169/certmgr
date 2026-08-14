@@ -281,7 +281,7 @@ def bulk_actions(
     action = body.get("action")
     ids = body.get("ids", [])
     options = body.get("options") or {}
-    if action not in {"renew", "revoke", "deploy", "issue"}:
+    if action not in {"renew", "revoke", "deploy", "issue", "delete"}:
         raise ValidationAppError(f"Unsupported bulk action: {action}")
     if not isinstance(ids, list) or not ids or len(ids) > 500:
         raise ValidationAppError("ids must be a non-empty list (max 500)")

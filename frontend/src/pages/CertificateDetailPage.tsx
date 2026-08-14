@@ -32,19 +32,23 @@ import AutorenewIcon from '@mui/icons-material/Autorenew'
 import BlockIcon from '@mui/icons-material/Block'
 import RocketLaunchIcon from '@mui/icons-material/RocketLaunch'
 import ArchiveIcon from '@mui/icons-material/Archive'
+import DeleteForeverIcon from '@mui/icons-material/DeleteForever'
 import { api, apiErrorMessage, downloadFile } from '../lib/api'
 import type { Certificate, Deployment, Execution, Page } from '../types'
 import { ConfirmDialog, ErrorBox, Loading, PageHeader, StatusChip, Toast, daysColor } from '../components/Shared'
 import { useAuth } from '../lib/auth-context'
 
+const DELETABLE_STATUSES = ['failed', 'revoked', 'archived']
+
 export default function CertificateDetailPage() {
   const { id } = useParams()
   const certId = Number(id)
   const { can } = useAuth()
+  const navigate = useNavigate()
   const qc = useQueryClient()
   const [tab, setTab] = useState(0)
   const [toast, setToast] = useState<{ message: string; severity: 'success' | 'error' } | null>(null)
-  const [confirm, setConfirm] = useState<null | 'renew' | 'revoke' | 'deploy'>(null)
+  const [confirm, setConfirm] = useState<null | 'renew' | 'revoke' | 'deploy' | 'delete'>(null)
   const [revokeReason, setRevokeReason] = useState('unspecified')
   const [deployTarget, setDeployTarget] = useState({ server_id: 0, method: 'sftp', target_service: 'nginx' })
 
@@ -72,6 +76,7 @@ export default function CertificateDetailPage() {
     mutationFn: async () => {
       if (confirm === 'renew') return api.post(`/certificates/${certId}/renew`, { force: false })
       if (confirm === 'revoke') return api.post(`/certificates/${certId}/revoke`, { reason: revokeReason, delete_after: true })
+      if (confirm === 'delete') return api.delete(`/certificates/${certId}`)
       if (confirm === 'deploy') {
         if (!deployTarget.server_id) throw new Error('Select a target server')
         return api.post('/deployments', {
@@ -84,7 +89,14 @@ export default function CertificateDetailPage() {
       throw new Error('unknown action')
     },
     onSuccess: (res) => {
+      const wasDelete = confirm === 'delete'
       setConfirm(null)
+      qc.invalidateQueries({ queryKey: ['certificates'] })
+      if (wasDelete) {
+        setToast({ message: 'Certificate deleted', severity: 'success' })
+        navigate('/certificates')
+        return
+      }
       setToast({ message: `Action queued: ${(res.data as { status?: string }).status ?? 'ok'}`, severity: 'success' })
       qc.invalidateQueries({ queryKey: ['cert', certId] })
       qc.invalidateQueries({ queryKey: ['cert-executions', certId] })
@@ -139,8 +151,11 @@ export default function CertificateDetailPage() {
             {can('certificate:deploy') && (
               <Button startIcon={<RocketLaunchIcon />} onClick={() => setConfirm('deploy')}>Deploy</Button>
             )}
-            {can('certificate:revoke') && (
+            {can('certificate:revoke') && !DELETABLE_STATUSES.includes(c.status) && (
               <Button color="error" startIcon={<BlockIcon />} onClick={() => setConfirm('revoke')}>Revoke</Button>
+            )}
+            {can('certificate:delete') && DELETABLE_STATUSES.includes(c.status) && (
+              <Button color="error" startIcon={<DeleteForeverIcon />} onClick={() => setConfirm('delete')}>Delete</Button>
             )}
           </>
         }
@@ -329,6 +344,15 @@ export default function CertificateDetailPage() {
         title="Renew this certificate?"
         body="A renewal attempt will be executed for this certificate."
         confirmLabel="Renew"
+        onConfirm={() => action.mutate()}
+        onClose={() => setConfirm(null)}
+      />
+      <ConfirmDialog
+        open={confirm === 'delete'}
+        title="Permanently delete this certificate?"
+        body="This removes the certificate record and its material (if any) entirely — immediate and irreversible. Only failed, revoked, or archived certificates can be deleted."
+        confirmLabel="Delete"
+        danger
         onConfirm={() => action.mutate()}
         onClose={() => setConfirm(null)}
       />

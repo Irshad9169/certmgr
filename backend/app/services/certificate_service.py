@@ -875,6 +875,8 @@ def _bulk_execute(db, action: str, cert_id: int, user, options: dict) -> None:
         template_id = options.get("template_id")
         deploy_certificate(db, certificate_id=cert_id, server_id=server_id,
                            template_id=template_id, user=user)
+    elif action == "delete":
+        delete_certificate(db, cert_id, user=user)
     else:
         raise ValidationAppError(f"Unsupported bulk action: {action}")
 
