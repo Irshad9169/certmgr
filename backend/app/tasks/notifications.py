@@ -13,7 +13,26 @@ from app.tasks.celery_app import celery_app
 
 logger = get_logger(__name__)
 
-_THRESHOLDS = (60, 30, 15, 7, 3, 1)
+_DEFAULT_THRESHOLDS = (60, 30, 15, 7, 3, 1)
+
+
+def _expiry_thresholds(db) -> tuple[int, ...]:
+    """Admin-configurable via Settings → notification.expiry_warning_days
+    (comma-separated days-before-expiry); falls back to the built-in
+    default if unset or unparseable. Sorted descending so the "break on
+    first match" loop in expiry_warnings() always picks the largest
+    (earliest/least-urgent) threshold a cert has crossed."""
+    from app.services.settings_service import get_setting
+
+    raw = get_setting(db, "notification.expiry_warning_days")
+    if not raw:
+        return _DEFAULT_THRESHOLDS
+    try:
+        parsed = {int(x.strip()) for x in raw.split(",") if x.strip()}
+    except ValueError:
+        logger.warning("Invalid notification.expiry_warning_days=%r; using default", raw)
+        return _DEFAULT_THRESHOLDS
+    return tuple(sorted(parsed, reverse=True)) or _DEFAULT_THRESHOLDS
 
 
 @celery_app.task(name="app.tasks.notifications.deliver")
@@ -39,12 +58,13 @@ def expiry_warnings(db) -> dict:
     """Emit expiry notifications for certs crossing each threshold (once)."""
     from app.services.notification_service import queue_event_notifications
 
+    thresholds = _expiry_thresholds(db)
     sent = 0
     for cert in db.query(Certificate).filter(Certificate.valid_until.isnot(None)).all():
         days = days_until(cert.valid_until)
         if days is None or days < 0:
             continue
-        for threshold in _THRESHOLDS:
+        for threshold in thresholds:
             if days <= threshold:
                 event = f"expiry_{threshold}"
                 # only queue if no prior notification for this cert+event

@@ -229,7 +229,11 @@ Values may be overridden in the admin UI (Settings) where applicable.
 | `CERTMGR_RENEWAL_CRON` | `0 3 * * *` | Renewal sweep time |
 | `CERTMGR_DISCOVERY_CRON` | `30 2 * * *` | Discovery time |
 | `CERTMGR_HEALTH_CRON` | `0 */4 * * *` | Health scan |
-| `CERTMGR_EXPIRY_WARNING_DAYS` | `[60,30,15,7,3,1]` | Notification thresholds |
+
+Expiry notification thresholds are configured at runtime via Settings →
+`notification.expiry_warning_days` (comma-separated days-before-expiry,
+e.g. `14,7,1`), not an environment variable — editable without a
+restart/redeploy.
 
 ### 5.7 Data retention (bounded DB growth)
 

@@ -128,7 +128,6 @@ class Settings(BaseSettings):
     renewal_cron: str = "0 3 * * *"  # 03:00 UTC daily
     discovery_cron: str = "30 2 * * *"
     health_cron: str = "0 */4 * * *"
-    expiry_warning_days: list[int] = Field(default_factory=lambda: [60, 30, 15, 7, 3, 1])
 
     # ── Data retention (bounded DB growth) ──────────────────────────────────
     # Purge history older than N days. 0 (or negative) = keep forever.

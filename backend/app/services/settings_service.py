@@ -37,6 +37,8 @@ DEFAULT_SETTINGS: dict[str, tuple[str, bool, str]] = {
     "teams.webhook_url": ("", True, "Microsoft Teams webhook URL (secret)"),
     "webhook.url": ("", True, "Generic webhook URL (secret)"),
     "notification.default_recipients": ("", False, "Default notification recipients (comma-separated emails)"),
+    "notification.expiry_warning_days": ("60,30,15,7,3,1", False,
+                                         "Days before expiry to send warnings (comma-separated, e.g. 14,7,1)"),
     "maintenance.message": ("", False, "Optional maintenance banner message"),
 }
 

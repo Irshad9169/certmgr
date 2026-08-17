@@ -26,10 +26,10 @@ import type { NotificationSettings } from '../types'
 import { ErrorBox, Loading, PageHeader, StatusChip, Toast } from '../components/Shared'
 import { useAuth } from '../lib/auth-context'
 
-const EVENTS = [
-  'expiry_60', 'expiry_30', 'expiry_15', 'expiry_7', 'expiry_3', 'expiry_1',
+const NON_EXPIRY_EVENTS = [
   'issued', 'renewed', 'failure', 'deployed', 'deployment_failed', 'revoked', 'imported', 'expired',
 ]
+const DEFAULT_EXPIRY_DAYS = '60,30,15,7,3,1'
 
 interface ChannelConfig {
   webhook_url?: string
@@ -55,6 +55,21 @@ export default function NotificationsPage() {
     queryKey: ['notif-settings'],
     queryFn: () => api.get<NotificationSettings[]>('/notifications/settings').then((r) => r.data),
   })
+  // Expiry thresholds are admin-configurable (Settings ->
+  // notification.expiry_warning_days) — the set of subscribable
+  // "expiry_N" events must track whatever that's currently set to, or a
+  // custom threshold (e.g. 14) would fire an event no channel could ever
+  // be configured to receive.
+  const { data: appSettings } = useQuery({
+    queryKey: ['settings'],
+    queryFn: () => api.get<{ settings: { key: string; value: string }[] }>('/settings').then((r) => r.data),
+  })
+  const expiryDays = appSettings?.settings.find((s) => s.key === 'notification.expiry_warning_days')?.value
+    || DEFAULT_EXPIRY_DAYS
+  const EVENTS = [
+    ...expiryDays.split(',').map((d) => `expiry_${d.trim()}`).filter((ev) => ev !== 'expiry_'),
+    ...NON_EXPIRY_EVENTS,
+  ]
   const history = useQuery({
     queryKey: ['notif-history'],
     queryFn: () =>
