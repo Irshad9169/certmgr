@@ -9,6 +9,12 @@
 set -eu
 
 HELPER="${1:?Usage: $0 /path/to/certmgr-challenge-helper}"
+# A fresh git checkout doesn't reliably preserve the executable bit
+# (especially when the repo was pushed from a Windows checkout) — sshd's
+# `command=` will need it executable in real deployment too, so fix it up
+# here rather than silently testing a different invocation mode than
+# production uses.
+chmod +x "$HELPER" 2>/dev/null || true
 SCRATCH="$(mktemp -d)"
 export CERTMGR_HELPER_WEBROOT="$SCRATCH/var/www/html"
 export CERTMGR_HELPER_OWNER="$(id -un)"   # avoid chown-to-secauto failing as non-root
