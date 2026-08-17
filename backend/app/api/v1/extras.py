@@ -186,7 +186,10 @@ reports_router = APIRouter(prefix="/reports", tags=["Reports"])
 
 @reports_router.get("/{report_type}.{fmt}")
 def download_report(report_type: str, fmt: str, db: DbSession, user: CurrentUser,
-                    request: Request, certificate_ids: str | None = Query(None)):
+                    request: Request, certificate_ids: str | None = Query(None),
+                    date_from: str | None = Query(None), date_to: str | None = Query(None)):
+    from datetime import datetime
+
     from fastapi.responses import Response
 
     from app.services.report_service import generate_report
@@ -198,7 +201,27 @@ def download_report(report_type: str, fmt: str, db: DbSession, user: CurrentUser
         from app.core.exceptions import ValidationAppError
 
         raise ValidationAppError("Unsupported format")
-    data, filename = generate_report(db, report_type, fmt, ids)
+
+    def _parse(dt: str | None, *, end_of_day: bool = False):
+        if not dt:
+            return None
+        try:
+            parsed = datetime.fromisoformat(dt)
+        except ValueError:
+            return None
+        # A bare date (no time component, e.g. from a <input type="date">
+        # picker) means "midnight at the start of that day" once parsed —
+        # for an inclusive end-of-range bound that silently excludes the
+        # entire end day itself, so push it to the last microsecond of
+        # that day instead.
+        if end_of_day and len(dt) == 10:
+            from datetime import timedelta
+
+            parsed = parsed + timedelta(days=1) - timedelta(microseconds=1)
+        return parsed
+
+    data, filename = generate_report(db, report_type, fmt, ids,
+                                     date_from=_parse(date_from), date_to=_parse(date_to, end_of_day=True))
     record(db, action="report.download", user_id=user.id, username=user.username,
            result=AuditResult.SUCCESS, ip_address=get_client_ip(request),
            user_agent=get_user_agent(request), details={"report_type": report_type, "format": fmt})

@@ -1,4 +1,4 @@
-import { Box, Button, Card, CardContent, Grid, Typography } from '@mui/material'
+import { Box, Button, Card, CardContent, Grid, Stack, TextField, Typography } from '@mui/material'
 import DescriptionIcon from '@mui/icons-material/Description'
 import { useState } from 'react'
 import { apiErrorMessage, downloadFile } from '../lib/api'
@@ -17,9 +17,16 @@ const FORMATS = ['csv', 'xlsx', 'pdf', 'json'] as const
 
 export default function ReportsPage() {
   const [toast, setToast] = useState<{ message: string; severity: 'success' | 'error' } | null>(null)
+  const [auditFrom, setAuditFrom] = useState('')
+  const [auditTo, setAuditTo] = useState('')
 
   const generate = (type: string, fmt: string) => {
-    downloadFile(`/reports/${type}.${fmt}`, {}, `${type}.${fmt}`)
+    const params: Record<string, string> = {}
+    if (type === 'audit') {
+      if (auditFrom) params.date_from = auditFrom
+      if (auditTo) params.date_to = auditTo
+    }
+    downloadFile(`/reports/${type}.${fmt}`, params, `${type}.${fmt}`)
       .then(() => setToast({ message: `Downloaded ${type}.${fmt}`, severity: 'success' }))
       .catch((e) => setToast({ message: apiErrorMessage(e), severity: 'error' }))
   }
@@ -40,6 +47,20 @@ export default function ReportsPage() {
                 <Typography variant="body2" color="text.secondary" sx={{ mb: 2, minHeight: 40 }}>
                   {r.description}
                 </Typography>
+                {r.type === 'audit' && (
+                  <Stack direction="row" spacing={1} sx={{ mb: 2 }}>
+                    <TextField
+                      label="From" type="date" size="small" fullWidth
+                      InputLabelProps={{ shrink: true }}
+                      value={auditFrom} onChange={(e) => setAuditFrom(e.target.value)}
+                    />
+                    <TextField
+                      label="To" type="date" size="small" fullWidth
+                      InputLabelProps={{ shrink: true }}
+                      value={auditTo} onChange={(e) => setAuditTo(e.target.value)}
+                    />
+                  </Stack>
+                )}
                 <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
                   {FORMATS.map((fmt) => (
                     <Button key={fmt} size="small" variant="outlined" onClick={() => generate(r.type, fmt)}>

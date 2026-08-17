@@ -57,13 +57,27 @@ def _history_rows(db: Session, job_type: str | None = None) -> list[dict[str, An
 
 
 def generate_report(db: Session, report_type: str, fmt: str,
-                    certificate_ids: list[int] | None = None) -> tuple[bytes, str]:
-    """Returns (bytes, filename). fmt ∈ csv|xlsx|pdf|json."""
+                    certificate_ids: list[int] | None = None,
+                    date_from: datetime | None = None, date_to: datetime | None = None,
+                    ) -> tuple[bytes, str]:
+    """Returns (bytes, filename). fmt ∈ csv|xlsx|pdf|json.
+
+    date_from/date_to currently only narrow the "audit" report (the only
+    one backed by a query that supports it — see query_audit()).
+    """
+    # PDF has real page-width constraints CSV/XLSX/JSON don't; a report
+    # with a lot of columns (inventory) needs a trimmed column set there
+    # specifically, or the table overflows the page regardless of font
+    # size / wrapping. None set here means "same as `headers`".
+    pdf_headers: list[str] | None = None
+
     if report_type == "inventory":
         data = _cert_rows(db, certificate_ids)
         headers = ["id", "domain", "sans", "issuer", "environment", "status", "key_type",
                    "key_size", "signature_algorithm", "created_at", "expires_at",
                    "days_remaining", "auto_renew", "renewal_status", "provider", "imported", "tags"]
+        pdf_headers = ["domain", "issuer", "environment", "status", "expires_at",
+                       "days_remaining", "auto_renew", "key_type"]
         title = "Certificate Inventory"
     elif report_type == "expiry":
         data = sorted(_cert_rows(db, certificate_ids), key=lambda r: r["expires_at"] or "")
@@ -87,13 +101,15 @@ def generate_report(db: Session, report_type: str, fmt: str,
         data = [{k: r[k] for k in headers} for r in data]
         title = "Failure Report"
     elif report_type == "audit":
-        rows, _ = query_audit(db, limit=5000)
+        rows, _ = query_audit(db, date_from=date_from, date_to=date_to, limit=5000)
         data = [{"id": a.id, "username": a.username or "", "action": a.action,
                  "resource_type": a.resource_type or "", "resource_id": a.resource_id or "",
                  "result": a.result, "ip_address": a.ip_address or "",
                  "created_at": a.created_at.isoformat() if a.created_at else ""} for a in rows]
         headers = ["id", "username", "action", "resource_type", "resource_id", "result", "ip_address", "created_at"]
         title = "Audit Log"
+        if date_from or date_to:
+            title += f" ({date_from.date() if date_from else '…'} to {date_to.date() if date_to else '…'})"
     else:
         raise ValueError(f"Unknown report type: {report_type}")
 
@@ -105,7 +121,7 @@ def generate_report(db: Session, report_type: str, fmt: str,
     if fmt == "xlsx":
         return _to_xlsx(title, headers, data), f"{report_type}.xlsx"
     if fmt == "pdf":
-        return _to_pdf(title, headers, data), f"{report_type}.pdf"
+        return _to_pdf(title, pdf_headers or headers, data), f"{report_type}.pdf"
     raise ValueError(f"Unsupported format: {fmt}")
 
 
@@ -142,25 +158,46 @@ def _to_xlsx(title: str, headers: list[str], data: list[dict]) -> bytes:
     return buf.getvalue()
 
 
+# Columns that regularly hold long free-text (a full issuer DN, an error
+# message, a comma-joined SAN/tag list) get proportionally more of the
+# page width; everything else splits what's left evenly.
+_PDF_WIDE_COLUMNS = {"issuer", "error", "sans", "tags", "domain", "action"}
+
+
 def _to_pdf(title: str, headers: list[str], data: list[dict]) -> bytes:
     from reportlab.lib import colors
+    from reportlab.lib.enums import TA_LEFT
     from reportlab.lib.pagesizes import A4, landscape
-    from reportlab.lib.styles import getSampleStyleSheet
+    from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
     from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 
+    margin = 24
     buf = io.BytesIO()
-    doc = SimpleDocTemplate(buf, pagesize=landscape(A4), title=title)
+    doc = SimpleDocTemplate(buf, pagesize=landscape(A4), title=title,
+                            leftMargin=margin, rightMargin=margin, topMargin=margin, bottomMargin=margin)
     styles = getSampleStyleSheet()
+    header_style = ParagraphStyle("ReportHeader", parent=styles["Normal"], fontName="Helvetica-Bold",
+                                  fontSize=8, leading=10, textColor=colors.white, alignment=TA_LEFT)
+    # wordWrap="CJK" also breaks long unbroken strings (hashes, tokens,
+    # comma-free DNs) mid-word — without it, reportlab only wraps at
+    # spaces, so exactly the kind of long unbroken value that overflows a
+    # fixed-width column wouldn't wrap at all.
+    cell_style = ParagraphStyle("ReportCell", parent=styles["Normal"], fontName="Helvetica",
+                                fontSize=7, leading=9, alignment=TA_LEFT, wordWrap="CJK")
+
     elements = [Paragraph(title, styles["Title"]), Spacer(1, 12)]
-    table_data = [headers] + [[str(row.get(h, "")) for h in headers] for row in data[:2000]]
-    table = Table(table_data, repeatRows=1)
+
+    weights = [3.0 if h in _PDF_WIDE_COLUMNS else 1.0 for h in headers]
+    available_width = landscape(A4)[0] - 2 * margin
+    col_widths = [available_width * w / sum(weights) for w in weights]
+
+    table_data = [[Paragraph(str(h), header_style) for h in headers]]
+    table_data += [[Paragraph(str(row.get(h, "")), cell_style) for h in headers] for row in data[:2000]]
+    table = Table(table_data, repeatRows=1, colWidths=col_widths)
     table.setStyle(TableStyle([
         ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#1E3A5F")),
-        ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
-        ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
-        ("FONTSIZE", (0, 0), (-1, 0), 8),
-        ("FONTSIZE", (0, 1), (-1, -1), 7),
         ("GRID", (0, 0), (-1, -1), 0.4, colors.grey),
+        ("VALIGN", (0, 0), (-1, -1), "TOP"),
         ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#F2F6FA")]),
     ]))
     elements.append(table)
