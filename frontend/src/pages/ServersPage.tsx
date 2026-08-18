@@ -25,11 +25,12 @@ import {
   Typography,
 } from '@mui/material'
 import AddIcon from '@mui/icons-material/Add'
+import DeleteIcon from '@mui/icons-material/Delete'
 import DnsIcon from '@mui/icons-material/Dns'
 import WifiTetheringIcon from '@mui/icons-material/WifiTethering'
 import { api, apiErrorMessage } from '../lib/api'
 import type { Page, Server } from '../types'
-import { EmptyState, ErrorBox, Loading, PageHeader, StatusChip, Toast } from '../components/Shared'
+import { ConfirmDialog, EmptyState, ErrorBox, Loading, PageHeader, StatusChip, Toast } from '../components/Shared'
 import { useAuth } from '../lib/auth-context'
 
 export default function ServersPage() {
@@ -39,6 +40,7 @@ export default function ServersPage() {
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(25)
   const [open, setOpen] = useState(false)
+  const [deleteTarget, setDeleteTarget] = useState<Server | null>(null)
   const [toast, setToast] = useState<{ message: string; severity: 'success' | 'error' } | null>(null)
   const [form, setForm] = useState({
     hostname: '', ip_address: '', environment: 'production', ssh_port: 22,
@@ -72,6 +74,16 @@ export default function ServersPage() {
     onSuccess: (res) => {
       const r = res.data as { reachable: boolean; error?: string }
       setToast({ message: r.reachable ? 'Server reachable' : `Unreachable: ${r.error ?? ''}`, severity: r.reachable ? 'success' : 'error' })
+      qc.invalidateQueries({ queryKey: ['servers'] })
+    },
+    onError: (e) => setToast({ message: apiErrorMessage(e), severity: 'error' }),
+  })
+
+  const deleteServer = useMutation({
+    mutationFn: (id: number) => api.delete(`/servers/${id}`),
+    onSuccess: () => {
+      setDeleteTarget(null)
+      setToast({ message: 'Server deleted', severity: 'success' })
       qc.invalidateQueries({ queryKey: ['servers'] })
     },
     onError: (e) => setToast({ message: apiErrorMessage(e), severity: 'error' }),
@@ -144,6 +156,16 @@ export default function ServersPage() {
                     >
                       Test
                     </Button>
+                    {can('server:manage') && (
+                      <Button
+                        size="small"
+                        color="error"
+                        startIcon={<DeleteIcon />}
+                        onClick={() => setDeleteTarget(s)}
+                      >
+                        Delete
+                      </Button>
+                    )}
                   </TableCell>
                 </TableRow>
               ))}
@@ -231,6 +253,15 @@ export default function ServersPage() {
           </Button>
         </DialogActions>
       </Dialog>
+      <ConfirmDialog
+        open={deleteTarget !== null}
+        title="Delete server"
+        body={`Remove "${deleteTarget?.hostname}" from inventory? Its deployment history stays on record, but this cannot be undone.`}
+        confirmLabel="Delete"
+        danger
+        onConfirm={() => deleteTarget && deleteServer.mutate(deleteTarget.id)}
+        onClose={() => setDeleteTarget(null)}
+      />
       <Toast toast={toast} onClose={() => setToast(null)} />
     </Box>
   )

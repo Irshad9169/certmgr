@@ -136,6 +136,19 @@ def update_server(db: Session, server_id: int, payload: dict[str, Any]) -> Serve
     return server
 
 
+def delete_server(db: Session, server_id: int) -> None:
+    """Permanently remove a server row. Deployment rows targeting it cascade
+    at the DB level (ON DELETE CASCADE); job execution history referencing
+    it is preserved with server_id set to NULL (ON DELETE SET NULL) — see
+    the initial schema migration, same pattern already used for
+    certificates."""
+    server = db.query(Server).filter(Server.id == server_id).first()
+    if server is None:
+        raise NotFoundError("Server not found")
+    db.delete(server)
+    db.commit()
+
+
 def list_servers(db: Session, *, search: str | None = None, environment: str | None = None,
                  page: int = 1, page_size: int = 25) -> tuple[list[Server], int]:
     q = db.query(Server)

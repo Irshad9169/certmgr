@@ -58,6 +58,19 @@ def update_server(server_id: int, body: ServerUpdate, db: DbSession, user: Curre
     return _serialize(server)
 
 
+@router.delete("/{server_id}")
+def delete_server(server_id: int, db: DbSession, user: CurrentUser, request: Request):
+    if user.role_name.value not in ("administrator", "certificate_manager"):
+        from app.core.exceptions import PermissionDeniedError
+
+        raise PermissionDeniedError("Not authorized to manage servers")
+    server_service.delete_server(db, server_id)
+    record(db, action="server.delete", user_id=user.id, username=user.username,
+           resource_type="server", resource_id=server_id, result=AuditResult.SUCCESS,
+           ip_address=get_client_ip(request), user_agent=get_user_agent(request))
+    return {"ok": True}
+
+
 @router.post("/{server_id}/test")
 def test_server(server_id: int, db: DbSession, user: CurrentUser, request: Request):
     result = server_service.test_connection(db, server_id)
