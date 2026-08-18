@@ -237,6 +237,18 @@ tests). No action needed beyond deploying those unit files as-is;
 recomputed fresh from the DB on every scrape regardless (`mostrecent`
 multiprocess mode), so they're accurate either way.
 
+Both units `chmod 1777` this shared directory rather than assuming a
+common group, since `certmgr-api` and `certmgr-worker` may run as
+entirely different, unrelated service accounts — most notably if you've
+applied the worker-as-root override below, where the worker runs as
+`root` (which can always fix the directory's permissions regardless of
+who created it first) while the API stays on whatever unprivileged
+account your org actually uses. If `/metrics` ever 500s with nothing
+useful in `journalctl -u certmgr-api` beyond the error itself, check
+`ls -la /var/lib/certmgr/prometheus_multiproc` first — a stale
+root-owned, non-world-writable directory from before this fix existed is
+the most likely cause; `chmod 1777` it manually and restart both units.
+
 Operational note: stale per-PID files can accumulate under
 `/var/lib/certmgr/prometheus_multiproc` across restarts (each process
 writes its own file, never cleaned up automatically). This is a known,

@@ -10,8 +10,15 @@ Group=certmgr
 WorkingDirectory=/opt/certmgr/backend
 EnvironmentFile=/etc/certmgr/certmgr.env
 # Must match the same path in certmgr-api.service — see the comment there.
+# The chmod here matters most when the root-override below is in use: root
+# can always chmod a directory regardless of who created/owns it, so this
+# is what reliably fixes permissions if this unit and certmgr-api.service
+# run as different accounts — certmgr-api.service's own chmod attempt may
+# fail in that case (non-owner, non-root) and is allowed to (see its "-"
+# prefix there).
 Environment=PROMETHEUS_MULTIPROC_DIR=/var/lib/certmgr/prometheus_multiproc
 ExecStartPre=/usr/bin/mkdir -p /var/lib/certmgr/prometheus_multiproc
+ExecStartPre=-/usr/bin/chmod 1777 /var/lib/certmgr/prometheus_multiproc
 ExecStart=/opt/certmgr/backend/.venv/bin/celery -A app.tasks.celery_app:celery_app worker --loglevel=INFO --concurrency=4 --max-tasks-per-child=200
 Restart=on-failure
 RestartSec=5

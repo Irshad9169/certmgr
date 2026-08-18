@@ -15,9 +15,24 @@ EnvironmentFile=/etc/certmgr/certmgr.env
 # worker would never see certbot/job activity that happened in the worker
 # process. This makes every process write to a shared mmap directory
 # instead, which /metrics then aggregates across (see app/main.py).
-# Must match the same path in certmgr-worker.service.
+# Must match the same path in certmgr-worker.service. chmod 1777 (not a
+# chgrp to some assumed shared group) because this unit and
+# certmgr-worker.service may run as different, unrelated service accounts
+# — e.g. the documented worker-as-root override runs the worker as root
+# while this unit stays on an unprivileged account with a different name
+# entirely (this directory holds nothing but local metric mmap files, so
+# world-writable is an acceptable tradeoff — same convention /tmp uses;
+# the sticky bit still stops one account from deleting another's files).
 Environment=PROMETHEUS_MULTIPROC_DIR=/var/lib/certmgr/prometheus_multiproc
 ExecStartPre=/usr/bin/mkdir -p /var/lib/certmgr/prometheus_multiproc
+# "-" prefix: chmod only succeeds for the owner or root, and if
+# certmgr-worker created this directory first (e.g. running as root under
+# the worker-as-root override) while this unit runs as a different,
+# unprivileged account, this attempt will fail — that's fine, a failing
+# ExecStartPre would otherwise block startup entirely, and
+# certmgr-worker.service's own chmod (which runs as root there and always
+# succeeds regardless of ownership) is what actually needs to be reliable.
+ExecStartPre=-/usr/bin/chmod 1777 /var/lib/certmgr/prometheus_multiproc
 ExecStartPre=/opt/certmgr/backend/.venv/bin/alembic upgrade head
 ExecStart=/opt/certmgr/backend/.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000 --workers 4 --proxy-headers
 Restart=on-failure
