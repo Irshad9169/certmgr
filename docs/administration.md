@@ -218,3 +218,55 @@ persists weekly reports.
 - Grafana dashboard: `infra/grafana/dashboards/certmgr.json`.
 - Logs are JSON lines under `CERTMGR_LOG_ROOT` (`app/`, `certbot/`, `deployments/`)
   and mirrored to stdout for container deployments.
+
+### Multiprocess metrics (required for certbot/job counters to be accurate)
+
+`certmgr-api` runs 4 uvicorn workers and `certmgr-worker` is a separate
+process entirely — each holds its own in-memory copy of every
+Counter/Gauge. Since real certbot executions and job completions mostly
+happen inside `certmgr-worker`, a plain single-process `/metrics` scrape
+from whichever API worker handles the request would never see that
+activity; `certmgr_certbot_executions_total`/`certmgr_jobs_total` would
+read close to zero. Both `deploy/systemd/certmgr-api.service` and
+`certmgr-worker.service` set the same `PROMETHEUS_MULTIPROC_DIR`, which
+makes every process write to a shared mmap directory instead —
+`/metrics` aggregates across all of them when that variable is present,
+falling back to the normal single-process registry otherwise (local dev,
+tests). No action needed beyond deploying those unit files as-is;
+`certmgr_certificates_total`/`certmgr_certificate_days_to_expiry` are
+recomputed fresh from the DB on every scrape regardless (`mostrecent`
+multiprocess mode), so they're accurate either way.
+
+Operational note: stale per-PID files can accumulate under
+`/var/lib/certmgr/prometheus_multiproc` across restarts (each process
+writes its own file, never cleaned up automatically). This is a known,
+harmless limitation of this deployment pattern — periodically clearing
+that directory with both services stopped is reasonable maintenance, not
+something to script into every restart (wiping it while the *other*
+service is still running would race).
+
+### Adding to an existing Prometheus + Grafana (e.g. alongside another app)
+
+1. Append a scrape job to the existing `prometheus.yml` (don't duplicate
+   the whole file — just add a job under the existing `scrape_configs:`):
+
+   ```yaml
+     - job_name: certmgr
+       metrics_path: /metrics
+       static_configs:
+         - targets: ["127.0.0.1:8000"]
+       # If CERTMGR_METRICS_AUTH_TOKEN is set:
+       # authorization:
+       #   credentials_file: /etc/prometheus/certmgr-metrics-token
+   ```
+
+   Reload without restarting: `curl -X POST http://localhost:9090/-/reload`
+   (requires `--web.enable-lifecycle`) or `systemctl reload prometheus`.
+
+2. Import `infra/grafana/dashboards/certmgr.json` via Grafana's UI
+   (Dashboards → New → Import → upload/paste the JSON) rather than
+   provisioning `infra/grafana/provisioning/datasources/prometheus.yml` —
+   that file would create a second, redundant Prometheus datasource. The
+   dashboard's panels reference `${DS_PROMETHEUS}`, so Import prompts you
+   to pick your already-configured Prometheus datasource (the same one
+   another app's dashboard already uses) instead of requiring a new one.

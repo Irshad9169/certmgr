@@ -28,11 +28,13 @@ CERTIFICATE_GAUGE = Gauge(
     "certmgr_certificates_total",
     "Total certificates by status",
     ["status"],
+    multiprocess_mode="mostrecent",
 )
 CERTIFICATE_DAYS_TO_EXPIRY = Gauge(
     "certmgr_certificate_days_to_expiry",
     "Days until expiry (1 = soonest expiring cert)",
     ["certificate_id"],
+    multiprocess_mode="mostrecent",
 )
 JOBS_TOTAL = Counter("certmgr_jobs_total", "Background jobs by type and status", ["type", "status"])
 

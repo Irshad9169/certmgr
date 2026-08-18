@@ -9,6 +9,15 @@ User=certmgr
 Group=certmgr
 WorkingDirectory=/opt/certmgr/backend
 EnvironmentFile=/etc/certmgr/certmgr.env
+# Required for Prometheus metrics to reflect reality: certmgr-api (4 uvicorn
+# workers) and certmgr-worker are separate processes, each with its own
+# in-memory Counter/Gauge state, so a plain /metrics scrape from one API
+# worker would never see certbot/job activity that happened in the worker
+# process. This makes every process write to a shared mmap directory
+# instead, which /metrics then aggregates across (see app/main.py).
+# Must match the same path in certmgr-worker.service.
+Environment=PROMETHEUS_MULTIPROC_DIR=/var/lib/certmgr/prometheus_multiproc
+ExecStartPre=/usr/bin/mkdir -p /var/lib/certmgr/prometheus_multiproc
 ExecStartPre=/opt/certmgr/backend/.venv/bin/alembic upgrade head
 ExecStart=/opt/certmgr/backend/.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000 --workers 4 --proxy-headers
 Restart=on-failure

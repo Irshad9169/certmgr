@@ -235,6 +235,24 @@ def create_app() -> FastAPI:
                 refresh_certificate_gauges(db)
             finally:
                 db.close()
+
+            # certmgr-api (multiple uvicorn workers) and certmgr-worker
+            # (Celery, a separate process entirely) each hold their own
+            # in-memory copy of every Counter/Gauge — most real activity
+            # (certbot executions, job completions) happens in the worker
+            # process, invisible to a plain generate_latest() called from
+            # whichever API worker serves this request. When
+            # PROMETHEUS_MULTIPROC_DIR is set (see deploy docs), every
+            # process instead writes to a shared mmap directory and this
+            # aggregates across all of them; falls back to the default
+            # single-process registry when that's not configured (local
+            # dev, tests).
+            if os.environ.get("PROMETHEUS_MULTIPROC_DIR"):
+                from prometheus_client import CollectorRegistry, multiprocess
+
+                registry = CollectorRegistry()
+                multiprocess.MultiProcessCollector(registry)
+                return Response(content=generate_latest(registry), media_type=CONTENT_TYPE_LATEST)
             return Response(content=generate_latest(), media_type=CONTENT_TYPE_LATEST)
 
     @app.get("/")

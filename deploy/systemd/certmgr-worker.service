@@ -9,6 +9,9 @@ User=certmgr
 Group=certmgr
 WorkingDirectory=/opt/certmgr/backend
 EnvironmentFile=/etc/certmgr/certmgr.env
+# Must match the same path in certmgr-api.service — see the comment there.
+Environment=PROMETHEUS_MULTIPROC_DIR=/var/lib/certmgr/prometheus_multiproc
+ExecStartPre=/usr/bin/mkdir -p /var/lib/certmgr/prometheus_multiproc
 ExecStart=/opt/certmgr/backend/.venv/bin/celery -A app.tasks.celery_app:celery_app worker --loglevel=INFO --concurrency=4 --max-tasks-per-child=200
 Restart=on-failure
 RestartSec=5
