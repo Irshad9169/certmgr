@@ -32,7 +32,7 @@ export default function ImportPage() {
   const [autoRenew, setAutoRenew] = useState(false)
   const [tags, setTags] = useState('')
   const [toast, setToast] = useState<{ message: string; severity: 'success' | 'error' } | null>(null)
-  const [godaddyLookup, setGodaddyLookup] = useState<'domain' | 'certificate_id'>('domain')
+  const [godaddyLookup, setGodaddyLookup] = useState<'domain' | 'certificate_id'>('certificate_id')
   const [godaddyValue, setGodaddyValue] = useState('')
   const [godaddyEnvironment, setGodaddyEnvironment] = useState('production')
 
@@ -180,8 +180,17 @@ export default function ImportPage() {
             certificates that already exist in GoDaddy — it does not request new ones.
           </Typography>
 
+          <Alert severity="info" sx={{ mb: 2, fontSize: 13 }}>
+            Use <strong>Certificate ID</strong> — open the certificate in GoDaddy's dashboard (SSL
+            Certificates), copy its ID from the URL or details panel, and paste it below. This is the
+            reliable method. Domain search is best-effort only: GoDaddy's own domain filter doesn't
+            reliably narrow results, and for accounts with a long certificate history it may not surface
+            the right one at all — this is a limitation of GoDaddy's API, not something a code change here
+            can fix.
+          </Alert>
+
           <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-            <Box sx={{ display: 'grid', gap: 2, gridTemplateColumns: { xs: '1fr', md: '160px 1fr' } }}>
+            <Box sx={{ display: 'grid', gap: 2, gridTemplateColumns: { xs: '1fr', md: '200px 1fr' } }}>
               <FormControl fullWidth>
                 <InputLabel>Look up by</InputLabel>
                 <Select
@@ -189,8 +198,8 @@ export default function ImportPage() {
                   label="Look up by"
                   onChange={(e) => setGodaddyLookup(e.target.value as 'domain' | 'certificate_id')}
                 >
-                  <MenuItem value="domain">Domain</MenuItem>
-                  <MenuItem value="certificate_id">Certificate ID</MenuItem>
+                  <MenuItem value="certificate_id">Certificate ID (recommended)</MenuItem>
+                  <MenuItem value="domain">Domain (best-effort)</MenuItem>
                 </Select>
               </FormControl>
               <TextField
@@ -221,12 +230,10 @@ export default function ImportPage() {
               {godaddyMutation.isPending ? 'Fetching…' : 'Fetch from GoDaddy'}
             </Button>
 
-            <Alert severity="info" sx={{ fontSize: 12 }}>
-              GoDaddy never has your private key — it's downloaded certificate-and-chain only, same as importing
-              a cert-only PEM above. Domain lookup checks every match's actual domains itself rather than trusting
-              GoDaddy's own filter, since it doesn't always narrow results correctly; if it can't find the right
-              one, use the exact certificate ID from your GoDaddy account instead.
-            </Alert>
+            <Typography variant="caption" color="text.secondary">
+              GoDaddy never has your private key — this downloads certificate-and-chain only, same as
+              importing a cert-only PEM above.
+            </Typography>
           </Box>
         </CardContent>
       </Card>
