@@ -141,7 +141,7 @@ export default function ImportPage() {
               <FormControl fullWidth>
                 <InputLabel>Environment</InputLabel>
                 <Select value={environment} label="Environment" onChange={(e) => setEnvironment(e.target.value)}>
-                  {['production', 'development', 'testing', 'staging', 'dr'].map((s) => (
+                  {['production', 'development', 'testing', 'qa', 'staging', 'dr'].map((s) => (
                     <MenuItem key={s} value={s}>{s}</MenuItem>
                   ))}
                 </Select>
@@ -214,7 +214,7 @@ export default function ImportPage() {
             <FormControl fullWidth sx={{ maxWidth: { md: 240 } }}>
               <InputLabel>Environment</InputLabel>
               <Select value={godaddyEnvironment} label="Environment" onChange={(e) => setGodaddyEnvironment(e.target.value)}>
-                {['production', 'development', 'testing', 'staging', 'dr'].map((s) => (
+                {['production', 'development', 'testing', 'qa', 'staging', 'dr'].map((s) => (
                   <MenuItem key={s} value={s}>{s}</MenuItem>
                 ))}
               </Select>

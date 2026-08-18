@@ -189,7 +189,7 @@ export default function CertificatesPage() {
               onChange={(e) => setFilters((f) => ({ ...f, environment: e.target.value }))}
             >
               <MenuItem value="">All</MenuItem>
-              {['production', 'development', 'testing', 'staging', 'dr'].map((s) => (
+              {['production', 'development', 'testing', 'qa', 'staging', 'dr'].map((s) => (
                 <MenuItem key={s} value={s}>{s}</MenuItem>
               ))}
             </Select>

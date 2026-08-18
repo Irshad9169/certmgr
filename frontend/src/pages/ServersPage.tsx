@@ -200,7 +200,7 @@ export default function ServersPage() {
               <FormControl fullWidth>
                 <InputLabel>Environment</InputLabel>
                 <Select label="Environment" value={form.environment} onChange={(e) => setForm((f) => ({ ...f, environment: e.target.value }))}>
-                  {['production', 'development', 'testing', 'dr', 'cloud', 'on_premise'].map((s) => (
+                  {['production', 'development', 'testing', 'qa', 'dr', 'cloud', 'on_premise'].map((s) => (
                     <MenuItem key={s} value={s}>{s}</MenuItem>
                   ))}
                 </Select>
