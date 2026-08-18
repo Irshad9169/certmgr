@@ -21,6 +21,7 @@ from app.models.enums import AuditResult, JobTrigger, JobType
 from app.schemas.certificate import (
     CertificateOut,
     CloneRequest,
+    GoDaddyImportRequest,
     ImportRequest,
     IssueRequestSchema,
     PaginatedCertificates,
@@ -284,6 +285,24 @@ def import_from_paths(
         user=user,
     )
     return {"certificate_id": cert.id, "domain": cert.domain}
+
+
+@router.post("/import/godaddy")
+def import_from_godaddy(body: GoDaddyImportRequest, db: DbSession, user: CurrentUser, request: Request):
+    if not has_permission(user.role_name.value, Perm["import"]):
+        raise PermissionDeniedError("You are not authorized to import certificates")
+    ensure_not_maintenance(db, operation="import")
+    from app.services.godaddy_service import fetch_certificate_from_godaddy
+
+    result = fetch_certificate_from_godaddy(
+        db, domain=body.domain, certificate_id=body.certificate_id,
+        environment=body.environment, auto_renew=body.auto_renew, user=user,
+    )
+    record(db, action="certificate.import.godaddy", user_id=user.id, username=user.username,
+           resource_type="certificate", resource_id=result["certificate_id"], result=AuditResult.SUCCESS,
+           ip_address=get_client_ip(request), user_agent=get_user_agent(request),
+           details={"godaddy_certificate_id": result["godaddy_certificate_id"]})
+    return result
 
 
 # ── Bulk actions ────────────────────────────────────────────────────────────

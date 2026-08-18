@@ -40,6 +40,8 @@ DEFAULT_SETTINGS: dict[str, tuple[str, bool, str]] = {
     "notification.expiry_warning_days": ("60,30,15,7,3,1", False,
                                          "Days before expiry to send warnings (comma-separated, e.g. 14,7,1)"),
     "maintenance.message": ("", False, "Optional maintenance banner message"),
+    "godaddy.api_key": ("", True, "GoDaddy API key (secret) — developer.godaddy.com"),
+    "godaddy.api_secret": ("", True, "GoDaddy API secret (secret)"),
 }
 
 

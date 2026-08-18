@@ -68,6 +68,17 @@ class ImportRequest(BaseModel):
     notes: str | None = None
 
 
+class GoDaddyImportRequest(BaseModel):
+    """Pull an already-issued certificate from a GoDaddy account (requires
+    godaddy.api_key/godaddy.api_secret configured in Settings). Provide
+    exactly one of domain or certificate_id."""
+
+    domain: str | None = Field(default=None, max_length=253)
+    certificate_id: str | None = Field(default=None, max_length=128)
+    environment: str = "production"
+    auto_renew: bool = False
+
+
 class CertificateOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
