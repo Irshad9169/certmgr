@@ -225,9 +225,16 @@ def create_app() -> FastAPI:
 
         @app.get("/metrics")
         def metrics(request: Request) -> Response:
+            from app.core.metrics import refresh_certificate_gauges
+
             token = app_settings.metrics_auth_token
             if token and request.headers.get("Authorization") != f"Bearer {token}":
                 return JSONResponse({"error": "unauthorized"}, status_code=401)
+            db = SessionLocal()
+            try:
+                refresh_certificate_gauges(db)
+            finally:
+                db.close()
             return Response(content=generate_latest(), media_type=CONTENT_TYPE_LATEST)
 
     @app.get("/")

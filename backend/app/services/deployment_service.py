@@ -22,6 +22,7 @@ from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.core.exceptions import DeploymentError, NotFoundError, ValidationAppError
 from app.core.logging import get_logger
+from app.core.metrics import JOBS_TOTAL
 from app.core.timeutils import utcnow
 from app.models.enums import (
     AuditResult,
@@ -367,9 +368,11 @@ def _record_execution(db, deployment, execution_id, error, exit_code, cert, serv
             existing.exit_code = exit_code
             existing.error_message = error[:4000] if error else None
             existing.finished_at = utcnow()
+            JOBS_TOTAL.labels(type=JobType.DEPLOY.value, status=status).inc()
             return existing
     db.add(exec_row)
     db.flush()
+    JOBS_TOTAL.labels(type=JobType.DEPLOY.value, status=status).inc()
     return exec_row
 
 

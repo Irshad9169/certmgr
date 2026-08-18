@@ -26,6 +26,7 @@ from app.core.exceptions import (
     ValidationAppError,
 )
 from app.core.logging import get_logger
+from app.core.metrics import JOBS_TOTAL
 from app.core.timeutils import ensure_aware, utcnow
 from app.models.certificate import Certificate, CertificateDomain, Tag
 from app.models.enums import (
@@ -432,6 +433,7 @@ def _execute_issuance(db: Session, cert: Certificate, user: User | None,
         cert.renewal_status = RenewalStatus.FAILED.value
         cert.renewal_error = f"Unknown provider: {cert.provider_name}"
         db.commit()
+        JOBS_TOTAL.labels(type=execution.job_type, status=execution.status).inc()
         return execution
 
     reconstructed = payload is None
@@ -501,6 +503,7 @@ def _execute_issuance(db: Session, cert: Certificate, user: User | None,
                details={"error": result.error})
         _notify(db, "failure", cert)
     db.commit()
+    JOBS_TOTAL.labels(type=execution.job_type, status=execution.status).inc()
     return execution
 
 
@@ -644,6 +647,7 @@ def renew_certificate(db: Session, certificate_id: int, *, force: bool = False,
                details={"error": result.error})
         _notify(db, "failure", cert)
     db.commit()
+    JOBS_TOTAL.labels(type=execution.job_type, status=execution.status).inc()
     return execution
 
 
@@ -691,6 +695,7 @@ def revoke_certificate(db: Session, certificate_id: int, *, reason: str = "unspe
                resource_type="certificate", resource_id=cert.id,
                result=AuditResult.FAILURE, details={"error": result.error})
     db.commit()
+    JOBS_TOTAL.labels(type=execution.job_type, status=execution.status).inc()
     return execution
 
 

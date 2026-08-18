@@ -200,6 +200,8 @@ class CertbotExecutor:
     def execute(self, argv: list[str], *, env: dict[str, str] | None = None,
                 execution_user: str | None = None, cwd: str | None = None,
                 timeout: int | None = None) -> CertbotOutcome:
+        from app.core.metrics import CERTBOT_EXECUTIONS
+
         result = run_command(
             argv,
             env=env,
@@ -207,6 +209,7 @@ class CertbotExecutor:
             cwd=cwd,
             timeout=timeout or self.timeout,
         )
+        CERTBOT_EXECUTIONS.labels(result="success" if result.success else "failure").inc()
         return CertbotOutcome(
             success=result.success,
             exit_code=result.returncode,
