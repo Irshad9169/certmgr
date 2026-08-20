@@ -141,7 +141,10 @@ sets up the DB (installs PG16/MariaDB **or** connects to an existing MariaDB
 and creates the `certmgr` DB+user idempotently), ensures Redis + Python
 3.11–3.13 (uses an existing interpreter, only builds 3.13 from source if none
 exists), creates the service user + storage dirs + venv + deps, writes
-`/etc/certmgr/certmgr.env` with generated secrets, runs Alembic migrations,
+`/etc/certmgr/certmgr.env` with generated secrets (or reuses
+`CERTMGR_SECRETS_MASTER_KEY`/`CERTMGR_SECRET_KEY` if pre-exported — required
+when migrating an existing install, see
+[docs/migration.md](docs/migration.md)), runs Alembic migrations,
 configures nginx (self-signed TLS) for your domain, installs systemd units
 (`api`/`worker`/`beat`) + daily backup / weekly backup-verify / daily retention
 timers, applies SELinux/firewall policy, and prints the bootstrap admin
@@ -281,6 +284,7 @@ scan. E2E flows: [docs/testing.md](docs/testing.md).
 | [architecture.md](architecture.md) | System architecture, components, data model, flows, security, HA, extensibility |
 | [changelog.md](changelog.md) | Release history and fixes |
 | [docs/installation.md](docs/installation.md) | Installation (Docker & bare-metal/OL8), configuration reference, DB matrix |
+| [docs/migration.md](docs/migration.md) | Move an existing installation to a new server (master key, storage, hooks, checklist) |
 | [docs/migration-mariadb-to-postgres.md](docs/migration-mariadb-to-postgres.md) | Move from MariaDB to PostgreSQL later |
 | [docs/administration.md](docs/administration.md) | Admin guide: settings, roles, providers, maintenance, backups/restore, retention |
 | [docs/user-guide.md](docs/user-guide.md) | Operator guide: wizard, inventory, import, deploy, discovery |

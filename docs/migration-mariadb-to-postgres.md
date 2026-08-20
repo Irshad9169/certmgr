@@ -4,6 +4,13 @@ CertMgr supports both, so this is a data move — no code changes. The database
 holds **metadata only**; private keys stay as encrypted files under
 `CERTMGR_STORAGE_ROOT`, so they are untouched by the migration.
 
+> Swapping the database engine **on the same server** (the pgloader path
+> below): no extra steps needed. Also moving to **new hardware** at the same
+> time (the "restore from backup archives" path, or relocating
+> `CERTMGR_STORAGE_ROOT`): `CERTMGR_SECRETS_MASTER_KEY` must be carried over
+> to the new host unchanged, or every existing private key/secret becomes
+> permanently undecryptable — see [migration.md](migration.md).
+
 ## Recommended: pgloader (automated, preserves everything)
 
 [pgloader](https://pgloader.io/) converts MariaDB → PostgreSQL directly,

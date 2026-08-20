@@ -485,6 +485,15 @@ API runs with `CERTMGR_RUN_SCHEDULER=1` in-process mode).
 `docs/migration-mariadb-to-postgres.md` — pgloader one-liner; keys on disk are
 untouched.
 
+### 10.9 Moving to a new server
+
+`docs/migration.md` — full server-to-server checklist. The one step that
+cannot be undone if missed: export `CERTMGR_SECRETS_MASTER_KEY` from the old
+server and pass it into the new server's setup script (both
+`deploy/server-setup-ol8.sh` and `deploy/server-setup.sh` now reuse it instead
+of generating a fresh one when it's pre-exported) — a freshly generated key
+makes every existing private key/secret permanently undecryptable.
+
 ## 11. Security
 
 See `docs/security.md` for the full threat model. Highlights:

@@ -156,6 +156,13 @@ when the API runs with `CERTMGR_RUN_SCHEDULER=1` (single-node in-process mode).
   - `--dry-run` validates the archive and reports the plan without writing
 - API: `POST /api/v1/backups/{backup_id}/restore` (admin, audited)
 - Database restore: restore the dump from `backups/database/`.
+- **Restoring onto a different server than the one that made the backup**
+  (disaster recovery onto new hardware, or a planned move): `certmgr backup`
+  archives and DB dumps are only readable with the same
+  `CERTMGR_SECRETS_MASTER_KEY` that created them — see
+  [migration.md](migration.md) for the full checklist (master key, hook
+  scripts, worker-as-root override, SSH credential config) beyond just these
+  two restore steps.
 
 ### Backup verification
 

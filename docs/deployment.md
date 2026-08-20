@@ -33,6 +33,8 @@ LB (nginx/ALB) ─▶│ api-1 │ api-2 │ api-3      │   stateless FastAPI 
 |---|---|---|
 | `/var/lib/certmgr/certificates` | encrypted keys + certs | NFS or object-storage-backed volume; `encrypted-filesystem` backend |
 | `/var/lib/certmgr/backups` | backups | same volume, retention 30d |
+| `/var/lib/certmgr/celerybeat-schedule` | Celery beat's last-run bookkeeping | file-based state; safe to lose (tasks just re-fire on next tick), but move it if you want continuity |
+| `/etc/letsencrypt` | certbot account registration + renewal config | shared with the dedicated certbot worker node (see above); also holds CertMgr's *own* nginx TLS cert — reissue for the new hostname, don't copy verbatim |
 | `/var/log/certmgr` | structured logs | local or log-shipper |
 
 `CERTMGR_STORAGE_BACKEND=filesystem|encrypted-filesystem|nfs` — keys are always
@@ -69,3 +71,7 @@ failures. Logs: JSON lines → ship with your collector (Fluentd/Vector/Loki).
 - Daily full DB dump (`backups/database/`) + certificate material backups.
 - Restore procedure: restore DB → restore certificate archives → re-run discovery
   to reconcile inventory → verify a sample deployment.
+- **Restoring to new/replacement hardware**, not the same host: `CERTMGR_SECRETS_MASTER_KEY`
+  must also be carried over (it's what makes the restored DB dump and certificate
+  archives decrypt correctly) — a fresh key here makes the restore permanently
+  unreadable. Full checklist: [migration.md](migration.md).

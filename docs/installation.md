@@ -48,6 +48,11 @@ The master key encrypts every private key and stored secret. To rotate:
 > There is no multi-key keyring in v1 — rotation is offline by design. This is
 > documented in [security.md](security.md#master-key-management).
 
+> **Not the same as migrating to a new server.** Rotation intentionally
+> replaces the key and abandons anything not re-imported. Moving to new
+> hardware should instead *carry the existing key over unchanged* — see
+> [migration.md](migration.md).
+
 ## Option B — Bare metal (systemd)
 
 ### Oracle Linux 8 / RHEL 8 — one command (recommended)
@@ -73,9 +78,11 @@ The script installs Redis, ensures Python 3.11+ (uses an existing
 builds 3.13 from source when no 3.11+ exists), nginx + self-signed TLS, sets up
 the DB (installs PostgreSQL 16 /
 MariaDB, or connects to an existing MariaDB and creates the `certmgr` DB+user),
-writes `/etc/certmgr/certmgr.env` with generated secrets, runs migrations, and
-installs the systemd units + backup/verify/retention timers. See the header of
-the script for a step-by-step explanation.
+writes `/etc/certmgr/certmgr.env` with generated secrets (or reuses
+`CERTMGR_SECRETS_MASTER_KEY`/`CERTMGR_SECRET_KEY` if pre-exported — see
+[migration.md](migration.md) if this is a server move, not a fresh install),
+runs migrations, and installs the systemd units + backup/verify/retention
+timers. See the header of the script for a step-by-step explanation.
 
 **External-MariaDB mode** never installs a DBMS and uses `MYSQL_PWD` for
 authentication (the admin password is not exposed on the command line). It

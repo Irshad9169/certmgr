@@ -22,6 +22,9 @@
 - Optional HashiCorp Vault (`CERTMGR_VAULT_ENABLED=1`) provides a KV backend for
   runtime secret retrieval; env remains the fallback.
 - Rotation is an offline procedure (see installation guide) — plan for it.
+- Moving to a **new server** is not rotation — the existing key must be carried
+  over unchanged or all existing encrypted data becomes permanently
+  undecryptable. See [migration.md](migration.md).
 
 ## RBAC permission matrix (seed)
 
