@@ -47,10 +47,17 @@ fi
 cd "$APP_DIR"
 
 # 3) Secrets / env ----------------------------------------------------------
+# Migrating an existing installation (not a fresh install)? Export
+# CERTMGR_SECRETS_MASTER_KEY (and ideally CERTMGR_SECRET_KEY) with the OLD
+# server's values before running this script — reused below instead of
+# generating fresh ones. CERTMGR_SECRETS_MASTER_KEY encrypts every private
+# key and secret already in the database/certificate storage you're
+# migrating; a freshly generated key here makes all of that permanently
+# undecryptable. See docs/migration.md.
 if [ ! -f .env ]; then
   echo "==> Generating secrets…"
-  SECRET_KEY="$(openssl rand -hex 32)"
-  MASTER_KEY="$(openssl rand -base64 40 | tr -d '/+=' | head -c 48)"
+  SECRET_KEY="${CERTMGR_SECRET_KEY:-$(openssl rand -hex 32)}"
+  MASTER_KEY="${CERTMGR_SECRETS_MASTER_KEY:-$(openssl rand -base64 40 | tr -d '/+=' | head -c 48)}"
   POSTGRES_PW="$(openssl rand -base64 24 | tr -d '/+=' | head -c 24)"
   cp backend/.env.example .env
   # Compose uses ${...} substitution for these:
@@ -61,7 +68,11 @@ if [ ! -f .env ]; then
     echo "CERTMGR_DEFAULT_LETSENCRYPT_EMAIL=$ADMIN_EMAIL"
     echo "CERTMGR_DOMAIN=$DOMAIN"
   } >> .env
-  echo "==> Secrets written to $APP_DIR/.env (keep this file safe!)"
+  if [ -n "${CERTMGR_SECRETS_MASTER_KEY:-}" ]; then
+    echo "==> $APP_DIR/.env written with your provided master key (migration mode) — keep it safe!"
+  else
+    echo "==> Secrets written to $APP_DIR/.env (keep this file safe!)"
+  fi
 else
   echo "==> .env already exists — keeping existing secrets"
 fi

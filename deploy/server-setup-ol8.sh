@@ -250,10 +250,22 @@ fi
 ok "python venv (from $PYTHON_BIN) + dependencies ready"
 
 # Environment file (idempotent — keeps existing secrets)
+#
+# Migrating an existing installation to this server (not a fresh install)?
+# Export CERTMGR_SECRETS_MASTER_KEY (and ideally CERTMGR_SECRET_KEY) with
+# the OLD server's values before running this script — they're reused
+# below instead of generating fresh ones. This matters:
+# CERTMGR_SECRETS_MASTER_KEY encrypts every private key and secret already
+# in the database/certificate storage you're migrating; a freshly
+# generated key here makes all of that permanently undecryptable. See
+# docs/migration.md for the full migration checklist.
 if [[ ! -f "$ENV_FILE" ]]; then
   say "     Writing secrets to $ENV_FILE"
-  SECRET_KEY="$(openssl rand -hex 32)"
-  MASTER_KEY="$(openssl rand -base64 40 | tr -d '/+=' | head -c 48)"
+  SECRET_KEY="${CERTMGR_SECRET_KEY:-$(openssl rand -hex 32)}"
+  MASTER_KEY="${CERTMGR_SECRETS_MASTER_KEY:-$(openssl rand -base64 40 | tr -d '/+=' | head -c 48)}"
+  if [[ -n "${CERTMGR_SECRETS_MASTER_KEY:-}" ]]; then
+    ok "reusing provided CERTMGR_SECRETS_MASTER_KEY (migration mode) — existing encrypted data will remain decryptable"
+  fi
   cat > "$ENV_FILE" <<EOF
 CERTMGR_ENVIRONMENT=production
 CERTMGR_DATABASE_URL=$DATABASE_URL
@@ -282,7 +294,11 @@ CERTMGR_NOTIFICATION_RETENTION_DAYS=365
 EOF
   chown "$APP_USER":"$APP_USER" "$ENV_FILE"
   chmod 600 "$ENV_FILE"
-  ok "secrets generated — keep $ENV_FILE safe!"
+  if [[ -n "${CERTMGR_SECRETS_MASTER_KEY:-}" ]]; then
+    ok "$ENV_FILE written with your provided master key — keep it safe!"
+  else
+    ok "secrets generated — keep $ENV_FILE safe!"
+  fi
 else
   ok "existing $ENV_FILE preserved"
 fi
