@@ -253,6 +253,7 @@ export default function CertificatesPage() {
                     onChange={(e) => setSelected(e.target.checked ? data.items.map((c) => c.id) : [])}
                   />
                 </TableCell>
+                <TableCell>ID</TableCell>
                 <TableCell sortDirection={sortBy === 'domain' ? sortDir : false}>
                   <TableSortLabel active={sortBy === 'domain'} direction={sortBy === 'domain' ? sortDir : 'asc'} onClick={() => onSort('domain')}>
                     Domain
@@ -285,6 +286,9 @@ export default function CertificatesPage() {
                 >
                   <TableCell padding="checkbox" onClick={(e) => e.stopPropagation()}>
                     <Checkbox checked={selected.includes(cert.id)} onChange={() => toggleSelect(cert.id)} />
+                  </TableCell>
+                  <TableCell>
+                    <Typography variant="caption" color="text.secondary">#{cert.id}</Typography>
                   </TableCell>
                   <TableCell>
                     <Typography variant="body2" sx={{ fontWeight: 600 }}>
