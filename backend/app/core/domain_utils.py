@@ -20,6 +20,7 @@ _IDN_PREFIX_RE = re.compile(r"^(xn--[a-z0-9-]+\.?)", re.IGNORECASE)
 _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 _HEX_FINGERPRINT_RE = re.compile(r"^[0-9A-Fa-f:]{47,95}$")
 _SERIAL_RE = re.compile(r"^[0-9A-Fa-f:]{2,}$")
+_SSH_USER_RE = re.compile(r"^[A-Za-z0-9_.-]{1,32}$")
 
 
 def validate_domain(domain: str, *, allow_wildcard: bool = False) -> str:
@@ -107,3 +108,27 @@ def validate_port(port: int) -> int:
     if not (1 <= int(port) <= 65535):
         raise ValidationAppError("Port must be between 1 and 65535")
     return int(port)
+
+
+def validate_proxy_jump(spec: str) -> str:
+    """Validate a ProxyJump spec (`user@host[:port]`).
+
+    This value is interpolated into a locally-executed `ssh` command line
+    (paramiko's ProxyCommand runs it via a shell) — an unvalidated user or
+    host could inject arbitrary shell commands executed as the app's own
+    service account, not just on the remote server.
+    """
+    s = (spec or "").strip()
+    if "@" not in s:
+        raise ValidationAppError("proxy_jump must be in user@host[:port] format")
+    user, hostport = s.rsplit("@", 1)
+    host, _, port = hostport.partition(":")
+    if not _SSH_USER_RE.match(user):
+        raise ValidationAppError(f"Invalid proxy_jump user '{user}'")
+    if not (is_valid_ip(host) or _HOSTNAME_RE.match(host.lower())):
+        raise ValidationAppError(f"Invalid proxy_jump host '{host}'")
+    if port:
+        if not port.isdigit():
+            raise ValidationAppError(f"Invalid proxy_jump port '{port}'")
+        validate_port(int(port))
+    return s

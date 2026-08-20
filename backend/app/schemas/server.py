@@ -6,7 +6,7 @@ from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from app.core.domain_utils import is_valid_ip, validate_domain, validate_port
+from app.core.domain_utils import is_valid_ip, validate_domain, validate_port, validate_proxy_jump
 
 
 class ServerCreate(BaseModel):
@@ -44,6 +44,11 @@ class ServerCreate(BaseModel):
     def _port(cls, v: int) -> int:
         return validate_port(v)
 
+    @field_validator("proxy_jump")
+    @classmethod
+    def _proxy_jump(cls, v: str | None) -> str | None:
+        return validate_proxy_jump(v) if v else v
+
 
 class ServerUpdate(BaseModel):
     hostname: str | None = None
@@ -62,6 +67,11 @@ class ServerUpdate(BaseModel):
     owner_id: int | None = None
     tags: list[str] | None = None
     notes: str | None = None
+
+    @field_validator("proxy_jump")
+    @classmethod
+    def _proxy_jump(cls, v: str | None) -> str | None:
+        return validate_proxy_jump(v) if v else v
 
 
 class ServerOut(BaseModel):

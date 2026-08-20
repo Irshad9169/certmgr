@@ -85,18 +85,20 @@ class SSHClient:
             ) from exc
 
     def _build_proxy_socket(self, paramiko):
-        # proxy_jump format: user@host[:port]
+        # ProxyCommand runs this string via a local shell, so the spec must be
+        # strictly validated first — an attacker-controlled user/host here is
+        # arbitrary command execution on the CertMgr host itself, not just the
+        # remote server.
         from paramiko import ProxyCommand
 
-        spec = self.config.proxy_jump
-        if "@" not in spec:
-            raise SSHConnectionError("proxy_jump must be in user@host[:port] format")
+        from app.core.domain_utils import validate_proxy_jump
+
+        spec = validate_proxy_jump(self.config.proxy_jump)
         user, hostport = spec.rsplit("@", 1)
         host, _, port = hostport.partition(":")
         port = int(port) if port else 22
-        return ProxyCommand(
-            f"ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -W {host}:{port} -p 22 {user}@{host}"
-        )
+        cmd = f"ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -W {host}:{port} -p 22 {user}@{host}"
+        return ProxyCommand(cmd)
 
     def _ensure(self):
         if self._client is None:
