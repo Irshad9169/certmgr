@@ -128,12 +128,15 @@ def list_certificates(
     total = q.count()
 
     sortable = {
+        "id": Certificate.id,
         "domain": Certificate.domain,
         "valid_until": Certificate.valid_until,
         "created_at": Certificate.created_at,
         "issuer": Certificate.issuer,
         "status": Certificate.status,
         "environment": Certificate.environment,
+        "key_type": Certificate.key_type,
+        "renewal_status": Certificate.renewal_status,
     }
     order_col = sortable.get(sort_by, Certificate.valid_until)
     dialect = db.get_bind().dialect.name

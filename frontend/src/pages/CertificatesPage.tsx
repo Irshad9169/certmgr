@@ -126,6 +126,14 @@ export default function CertificatesPage() {
     }
   }
 
+  const sortHeader = (col: string, label: string) => (
+    <TableCell sortDirection={sortBy === col ? sortDir : false}>
+      <TableSortLabel active={sortBy === col} direction={sortBy === col ? sortDir : 'asc'} onClick={() => onSort(col)}>
+        {label}
+      </TableSortLabel>
+    </TableCell>
+  )
+
   return (
     <Box>
       <PageHeader
@@ -253,24 +261,16 @@ export default function CertificatesPage() {
                     onChange={(e) => setSelected(e.target.checked ? data.items.map((c) => c.id) : [])}
                   />
                 </TableCell>
-                <TableCell>ID</TableCell>
-                <TableCell sortDirection={sortBy === 'domain' ? sortDir : false}>
-                  <TableSortLabel active={sortBy === 'domain'} direction={sortBy === 'domain' ? sortDir : 'asc'} onClick={() => onSort('domain')}>
-                    Domain
-                  </TableSortLabel>
-                </TableCell>
+                {sortHeader('id', 'ID')}
+                {sortHeader('domain', 'Domain')}
                 <TableCell>SANs</TableCell>
-                <TableCell>Issuer</TableCell>
-                <TableCell>Env</TableCell>
-                <TableCell>Status</TableCell>
-                <TableCell>Key</TableCell>
-                <TableCell sortDirection={sortBy === 'valid_until' ? sortDir : false}>
-                  <TableSortLabel active={sortBy === 'valid_until'} direction={sortBy === 'valid_until' ? sortDir : 'asc'} onClick={() => onSort('valid_until')}>
-                    Expires
-                  </TableSortLabel>
-                </TableCell>
-                <TableCell>Days</TableCell>
-                <TableCell>Renewal</TableCell>
+                {sortHeader('issuer', 'Issuer')}
+                {sortHeader('environment', 'Env')}
+                {sortHeader('status', 'Status')}
+                {sortHeader('key_type', 'Key')}
+                {sortHeader('valid_until', 'Expires')}
+                {sortHeader('valid_until', 'Days')}
+                {sortHeader('renewal_status', 'Renewal')}
                 <TableCell>Tags</TableCell>
                 <TableCell />
               </TableRow>

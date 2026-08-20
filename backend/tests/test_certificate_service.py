@@ -112,6 +112,28 @@ def test_list_certificates_search_and_filter(db, sample_certificate):
     assert total == 0
 
 
+def test_list_certificates_sortable_columns(db):
+    """Regression test for the Certificates page's per-column sort arrows —
+    each of these must be a real, whitelisted sort key server-side, not
+    just decorative in the UI."""
+    _o1, pem1, key1 = _generate_self_signed(["zzz-sort.example.com"])
+    _o2, pem2, key2 = _generate_self_signed(["aaa-sort.example.com"])
+    cert_a = import_certificate(db, cert_data=pem1, key_data=key1)
+    cert_b = import_certificate(db, cert_data=pem2, key_data=key2)
+    cert_a.key_type, cert_b.key_type = "ecdsa_p256", "rsa2048"
+    cert_a.renewal_status, cert_b.renewal_status = "success", "failed"
+    db.commit()
+
+    for sort_by, ascending_first_id in (
+        ("id", cert_a.id),
+        ("key_type", cert_a.id),   # "ecdsa_p256" < "rsa2048"
+        ("renewal_status", cert_b.id),  # "failed" < "success"
+    ):
+        rows, _total, _summary = list_certificates(db, sort_by=sort_by, sort_dir="asc")
+        ids = [r.id for r in rows if r.id in (cert_a.id, cert_b.id)]
+        assert ids[0] == ascending_first_id, f"sort_by={sort_by} did not order ascending as expected"
+
+
 def test_issue_with_mocked_provider(db, admin_user, monkeypatch, tmp_path):
     """Issue through the service with a fake provider returning real files."""
     from app.services.providers.letsencrypt import LetsEncryptProvider
