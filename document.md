@@ -42,8 +42,11 @@ It is **not** a Certbot frontend. It is a complete certificate lifecycle
 management platform:
 
 - **Provider abstraction** — Let's Encrypt (via Certbot/ACME v2) ships today;
-  DigiCert, GoDaddy, Sectigo, GlobalSign, Entrust, Microsoft ADCS and internal
-  PKI plug in without core changes (see [architecture.md](architecture.md)).
+  DigiCert, Sectigo, GlobalSign, Entrust, Microsoft ADCS and internal PKI plug
+  in without core changes (see [architecture.md](architecture.md)). GoDaddy
+  has a separate, narrower integration already built — pulling an
+  already-issued certificate by domain or certificate ID (Import page) —
+  since GoDaddy's own API doesn't support ACME-style issue/renew automation.
 - **Metadata only in the database** — private keys are **never** stored in the
   database; they are Fernet-encrypted at rest on disk.
 - **Runs on PostgreSQL (primary), MariaDB/MySQL (fully supported fallback) or
@@ -536,9 +539,18 @@ the database holds paths + metadata only.
 With retention defaults: ~150–400 MB @ 1k certificates, ~1–3 GB @ 5k
 certificates, stable year over year (execution logs are the biggest driver).
 
-**Q: Can I add DigiCert / GoDaddy / Sectigo / etc.?**
+**Q: Can I add DigiCert / Sectigo / GlobalSign / etc.?**
 Yes — implement `CertificateProvider`, register the entry point
 `certmgr.providers`, restart. No core changes (see architecture.md).
+
+**Q: What about GoDaddy?**
+Already integrated, but narrower than the above: the Import page can fetch
+an already-issued certificate directly from a GoDaddy account by domain or
+certificate ID (`godaddy.api_key`/`godaddy.api_secret` in Settings). It
+doesn't issue or renew — GoDaddy's API doesn't support that the way ACME
+does, so this isn't a full `CertificateProvider`. Domain search is
+best-effort (GoDaddy's own filter is unreliable for accounts with a long
+certificate history); certificate ID lookup always works.
 
 **Q: How do I renew automatically?**
 Enable auto-renew on the certificate; the daily renewal sweep renews within
