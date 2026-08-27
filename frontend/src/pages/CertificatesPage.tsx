@@ -50,6 +50,13 @@ function issuerLabel(issuer?: string | null): string {
   return attrs.organizationName || attrs.commonName || issuer
 }
 
+const CERT_TYPE_LABELS: Record<string, string> = {
+  single: 'Single', multi: 'SAN', wildcard: 'Wildcard', internal: 'Internal', imported: 'Imported',
+}
+const CERT_TYPE_COLORS: Record<string, 'default' | 'secondary' | 'primary'> = {
+  wildcard: 'secondary', multi: 'primary',
+}
+
 interface Filters {
   search: string
   status: string
@@ -264,6 +271,7 @@ export default function CertificatesPage() {
                 {sortHeader('id', 'ID')}
                 {sortHeader('domain', 'Domain')}
                 <TableCell>SANs</TableCell>
+                {sortHeader('cert_type', 'Type')}
                 {sortHeader('issuer', 'Issuer')}
                 {sortHeader('environment', 'Env')}
                 {sortHeader('status', 'Status')}
@@ -294,12 +302,19 @@ export default function CertificatesPage() {
                     <Typography variant="body2" sx={{ fontWeight: 600 }}>
                       {cert.domain}
                     </Typography>
-                    {cert.is_wildcard && <Chip size="small" label="wildcard" color="secondary" sx={{ mt: 0.5 }} />}
                   </TableCell>
                   <TableCell>
                     <Typography variant="caption" color="text.secondary" sx={{ display: 'block', maxWidth: 220, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                       {cert.sans.join(', ')}
                     </Typography>
+                  </TableCell>
+                  <TableCell>
+                    <Chip
+                      size="small"
+                      variant={CERT_TYPE_COLORS[cert.cert_type] ? 'filled' : 'outlined'}
+                      color={CERT_TYPE_COLORS[cert.cert_type] ?? 'default'}
+                      label={CERT_TYPE_LABELS[cert.cert_type] ?? cert.cert_type}
+                    />
                   </TableCell>
                   <TableCell>
                     <Tooltip title={cert.issuer ?? ''}>

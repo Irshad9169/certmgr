@@ -122,12 +122,14 @@ def test_list_certificates_sortable_columns(db):
     cert_b = import_certificate(db, cert_data=pem2, key_data=key2)
     cert_a.key_type, cert_b.key_type = "ecdsa_p256", "rsa2048"
     cert_a.renewal_status, cert_b.renewal_status = "success", "failed"
+    cert_a.cert_type, cert_b.cert_type = "wildcard", "multi"
     db.commit()
 
     for sort_by, ascending_first_id in (
         ("id", cert_a.id),
         ("key_type", cert_a.id),   # "ecdsa_p256" < "rsa2048"
         ("renewal_status", cert_b.id),  # "failed" < "success"
+        ("cert_type", cert_b.id),  # "multi" < "wildcard"
     ):
         rows, _total, _summary = list_certificates(db, sort_by=sort_by, sort_dir="asc")
         ids = [r.id for r in rows if r.id in (cert_a.id, cert_b.id)]

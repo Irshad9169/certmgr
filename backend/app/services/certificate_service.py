@@ -137,6 +137,7 @@ def list_certificates(
         "environment": Certificate.environment,
         "key_type": Certificate.key_type,
         "renewal_status": Certificate.renewal_status,
+        "cert_type": Certificate.cert_type,
     }
     order_col = sortable.get(sort_by, Certificate.valid_until)
     dialect = db.get_bind().dialect.name
