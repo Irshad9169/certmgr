@@ -193,8 +193,19 @@ pipeline, and a handful of new operator-facing features.
   original 2026-08-12 security review). Fixed with strict validation enforced
   at both the API schema layer and again at point of use.
 - Ran the full test suite + `ruff` + `bandit` against the 2026-08-13 security
-  remediation for the first time (234 tests, later 253 after this release's
+  remediation for the first time (234 tests, later 255 after this release's
   additions) — confirms those fixes are real, not just manually reviewed.
+
+### Fixed
+- **Imported certificates always got `cert_type="imported"` regardless of
+  their actual structure** — `import_certificate()` already parsed
+  `is_wildcard`/`sans` correctly but hardcoded the type field anyway, so a
+  wildcard or SAN certificate brought in via import looked identical to a
+  single-domain one everywhere `cert_type` is used (the new Type column,
+  the dashboard's certificates-by-type breakdown). Now derived from
+  structure like issued certificates already were; the separate `imported`
+  boolean still tracks provenance. Migration `b2e6f1a4c7d9` backfills
+  existing rows.
 
 ### Added
 - **`docs/migration.md`** — a full server-to-server migration runbook (master
