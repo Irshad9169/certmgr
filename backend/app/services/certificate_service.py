@@ -821,7 +821,7 @@ def import_certificate(
         domain=primary,
         sans=meta.sans or [primary],
         is_wildcard=meta.is_wildcard,
-        cert_type=CertificateType.IMPORTED.value,
+        cert_type=_cert_type_for(meta.sans or [primary]),
         subject=meta.subject, issuer=meta.issuer, serial_number=meta.serial_number,
         fingerprint_sha256=meta.fingerprint_sha256,
         public_key_algorithm=meta.public_key_algorithm,

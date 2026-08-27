@@ -35,9 +35,28 @@ def test_import_pem_certificate(db, sample_certificate):
     assert cert.key_size == 2048
     assert cert.imported is True
     assert cert.valid_until is not None
+    # cert_type must reflect actual structure (SAN), not just "imported" —
+    # the `imported` flag above already tracks provenance separately.
+    assert cert.cert_type == "multi"
     # Private key content must NOT be in the DB
     assert "PRIVATE KEY" not in repr(cert.__dict__)
     assert cert.key_path and os.path.exists(cert.key_path)
+
+
+def test_import_wildcard_certificate_gets_wildcard_type(db):
+    _, cert_pem, key_pem = _generate_self_signed(["*.wildcard-import.example.com"])
+    cert = import_certificate(db, cert_data=cert_pem, key_data=key_pem)
+    assert cert.imported is True
+    assert cert.is_wildcard is True
+    assert cert.cert_type == "wildcard"
+
+
+def test_import_single_domain_certificate_gets_single_type(db):
+    _, cert_pem, key_pem = _generate_self_signed(["single-import.example.com"])
+    cert = import_certificate(db, cert_data=cert_pem, key_data=key_pem)
+    assert cert.imported is True
+    assert cert.is_wildcard is False
+    assert cert.cert_type == "single"
 
 
 def test_import_detects_duplicate(db, sample_certificate):
