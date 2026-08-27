@@ -114,6 +114,57 @@ proceed without the credential — you'll see a clear "SSH credential
 injection requires a one-time setup step" error on the certificate's job
 execution log instead.
 
+**If the only reason you need SSH access to a remote host is to place an
+HTTP-01 challenge file there** (not to run other commands), consider the
+challenge-delegation approach below instead — it needs no SSH credential of
+any kind, ever, and is a one-time setup on the remote host rather than a
+standing key CertMgr has to be trusted with.
+
+## HTTP-01 challenge delegation (no SSH credential needed)
+
+When a domain's DNS resolves to a shared front-end host that CertMgr doesn't
+otherwise manage, the usual approach is to `ssh` there per-issuance to write
+the challenge file (see above). An alternative that avoids any SSH/root
+access to that host at all: have the front-end host **pull** the challenge
+content from CertMgr's automation host instead of CertMgr **pushing** it
+there.
+
+`deploy/certmgr-challenge-proxy.cgi` is a minimal, dependency-free
+(`HTTP::Tiny` only — a Perl core module, nothing to install) CGI script for
+exactly this. Installed on the front-end host and mounted at
+`/.well-known/acme-challenge/`, it:
+
+- accepts only `GET` requests with a well-formed ACME token in the path
+  (rejects anything else — path traversal, injection, wrong method — before
+  making any outbound call);
+- fetches `http://<CertMgr host>:<port>/.well-known/acme-challenge/<token>`
+  from a **hardcoded** constant in the script (never derived from the
+  request, so there's no SSRF/open-proxy risk) and returns the response
+  verbatim;
+- makes no filesystem writes and holds no credentials of any kind.
+
+**Setup (one-time, on the front-end host):**
+
+1. Deploy `deploy/certmgr-challenge-proxy.cgi`, editing the
+   `$UPSTREAM_HOST`/`$UPSTREAM_PORT` constants near the top to point at
+   CertMgr's own webroot (a plain `webroot`-validation Hook serving
+   `.well-known/acme-challenge/` locally — no SSH involved on CertMgr's side
+   either).
+2. Mount it at `/.well-known/acme-challenge/`:
+   - **Apache:** `ScriptAliasMatch ^/\.well-known/acme-challenge/(.*)$ /path/to/certmgr-challenge-proxy.cgi/$1`
+   - **nginx:** needs `fcgiwrap` (nginx has no native CGI support) — or,
+     more simply, use nginx's own `proxy_pass` directly instead of this CGI
+     script (functionally equivalent for this one purpose; see the
+     migration/ops-request examples in [migration.md](migration.md)).
+3. Run `deploy/test-certmgr-challenge-proxy.sh /path/to/certmgr-challenge-proxy.cgi`
+   before wiring it into the real web server config — it fakes the CGI
+   environment and a throwaway upstream to validate accept/reject behavior
+   without touching production paths.
+
+This is a smaller, more reviewable ask for an ops team than either a
+dedicated SSH keypair or a credential-vaulting tool grant: the script has no
+persistent state, no credential, and a fixed, auditable outbound target.
+
 ## Maintenance mode
 
 Settings → Maintenance: pause renewals / deployments / notifications / imports /
