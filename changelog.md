@@ -179,6 +179,40 @@ pipeline, and a handful of new operator-facing features.
 
 ---
 
+## [1.2.0] — 2026-08-27 — Security fix, migration runbook, certificate type
+
+### Fixed — security
+- **Shell injection via the Server `proxy_jump` field (RCE)** — the field
+  (`user@host[:port]`) had no format validation and was interpolated into a
+  command line handed to paramiko's `ProxyCommand`, which runs it via a local
+  shell. Anyone able to create/edit a Server row could set
+  `proxy_jump="root@host; rm -rf /"` and get arbitrary command execution as
+  the CertMgr service account on the CertMgr host itself — independent of the
+  target server's own SSH auth. Found via this project's first-ever `bandit`
+  run (no Python interpreter was available in the session that did the
+  original 2026-08-12 security review). Fixed with strict validation enforced
+  at both the API schema layer and again at point of use.
+- Ran the full test suite + `ruff` + `bandit` against the 2026-08-13 security
+  remediation for the first time (234 tests, later 253 after this release's
+  additions) — confirms those fixes are real, not just manually reviewed.
+
+### Added
+- **`docs/migration.md`** — a full server-to-server migration runbook (master
+  key, storage roots, certbot state, hook scripts, worker-as-root override,
+  SSH credential config, CertMgr's own web-UI TLS cert, SELinux relabeling).
+  Cross-linked from every other doc an operator planning a move would
+  plausibly land on first.
+- `deploy/server-setup-ol8.sh` / `deploy/server-setup.sh` now reuse an
+  exported `CERTMGR_SECRETS_MASTER_KEY`/`CERTMGR_SECRET_KEY` instead of always
+  generating fresh ones — previously, migrating to a new server via the
+  normal setup script silently made every existing private key and secret
+  permanently undecryptable.
+- **Type column on the Certificates page** (Single / SAN / Wildcard /
+  Internal / Imported), sortable — replaces the old ad-hoc "wildcard" chip
+  under the domain, which couldn't distinguish SAN from single-domain certs.
+
+---
+
 ## [Unreleased] — Planned
 
 - SSO: LDAP/AD, OpenID Connect, OAuth2, SAML (settings scaffolding exists).
