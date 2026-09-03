@@ -8,13 +8,15 @@ from __future__ import annotations
 import socket
 import ssl
 import threading
+from datetime import timedelta
 
 import pytest
 from conftest import _generate_self_signed  # noqa: F401
 
-from app.core.timeutils import ensure_aware
+from app.core.timeutils import ensure_aware, utcnow
 from app.models.certificate import Certificate
-from app.models.job import NetworkCertificateSighting
+from app.models.job import DiscoveryIgnore, NetworkCertificateSighting
+from app.services.certificate_service import delete_certificate
 from app.services.discovery_service import run_network_scan
 
 
@@ -95,7 +97,11 @@ def test_scan_creates_certificate_and_sighting(db, tls_server):
     assert run.imported_count == 1
 
     cert = db.query(Certificate).filter(Certificate.provider_name == "network-scan").one()
-    assert cert.status == "discovered"
+    # 90-day validity (the fixture's default), well outside the 30-day
+    # renewal threshold -> active, not a fixed "discovered" placeholder
+    # that would never reflect the cert's actual validity going forward.
+    assert cert.status == "active"
+    assert cert.managed_by_platform is False
     assert cert.domain == "scan-target.example.com"
     assert cert.key_path is None
     assert cert.cert_path is not None
@@ -160,3 +166,66 @@ def test_closed_port_yields_no_certificate(db):
     assert run.status == "completed"
     assert run.found_count == 0
     assert run.imported_count == 0
+
+
+def test_soon_to_expire_cert_gets_expiring_status_on_creation(db, tmp_path):
+    # 1-day validity is well inside the 30-day default renewal threshold —
+    # must be classified "expiring" immediately, not a fixed placeholder
+    # that never reflects validity (found on test05 2026-09-03: a
+    # network-discovered cert stayed "discovered" forever since it never
+    # goes through the issue/renew flow that updates status elsewhere).
+    _, cert_pem, key_pem = _generate_self_signed(["soon-expiring.example.com"], validity_days=1)
+    server = _LocalTLSServer(tmp_path, cert_pem, key_pem)
+    try:
+        run_network_scan(db, targets=["127.0.0.1"], ports=[server.port], concurrency=2, timeout_seconds=2)
+    finally:
+        server.stop()
+
+    cert = db.query(Certificate).filter(Certificate.domain == "soon-expiring.example.com").one()
+    assert cert.status == "expiring"
+
+
+def test_rescan_refreshes_status_of_existing_network_cert(db, tls_server):
+    run_network_scan(db, targets=["127.0.0.1"], ports=[tls_server.port], concurrency=2, timeout_seconds=2)
+    cert = db.query(Certificate).filter(Certificate.provider_name == "network-scan").one()
+    assert cert.status == "active"
+
+    # Simulate time passing without a new certificate being issued for this
+    # endpoint — the cert itself hasn't changed, but it's now within the
+    # renewal threshold. A rescan (not just creation) must catch this.
+    cert.valid_until = utcnow() + timedelta(days=5)
+    db.commit()
+
+    run_network_scan(db, targets=["127.0.0.1"], ports=[tls_server.port], concurrency=2, timeout_seconds=2)
+    db.refresh(cert)
+    assert cert.status == "expiring"
+
+
+def test_delete_network_scan_certificate_allowed_regardless_of_status(db, tls_server):
+    run_network_scan(db, targets=["127.0.0.1"], ports=[tls_server.port], concurrency=2, timeout_seconds=2)
+    cert = db.query(Certificate).filter(Certificate.provider_name == "network-scan").one()
+    assert cert.status == "active"  # not one of the failed/revoked/archived statuses
+
+    delete_certificate(db, cert.id)  # must not raise
+
+    assert db.query(Certificate).filter(Certificate.id == cert.id).first() is None
+    # sightings cascade-delete with the certificate row
+    assert db.query(NetworkCertificateSighting).filter(
+        NetworkCertificateSighting.certificate_id == cert.id
+    ).count() == 0
+
+
+def test_deleted_network_scan_certificate_is_not_recreated_by_next_scan(db, tls_server):
+    run_network_scan(db, targets=["127.0.0.1"], ports=[tls_server.port], concurrency=2, timeout_seconds=2)
+    cert = db.query(Certificate).filter(Certificate.provider_name == "network-scan").one()
+    fingerprint = cert.fingerprint_sha256
+
+    delete_certificate(db, cert.id)  # writes a DiscoveryIgnore row for this fingerprint
+
+    assert db.query(DiscoveryIgnore).filter(DiscoveryIgnore.fingerprint_sha256 == fingerprint).count() == 1
+
+    run2 = run_network_scan(db, targets=["127.0.0.1"], ports=[tls_server.port], concurrency=2, timeout_seconds=2)
+
+    assert run2.imported_count == 0
+    assert db.query(Certificate).filter(Certificate.fingerprint_sha256 == fingerprint).count() == 0
+    assert "SKIP ignored" in run2.log

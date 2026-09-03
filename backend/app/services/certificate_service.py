@@ -735,7 +735,7 @@ def delete_certificate(db: Session, certificate_id: int, *, user: User | None = 
     already has an explicit ON DELETE CASCADE/SET NULL (see the initial
     schema migration), so no explicit cleanup is needed for those."""
     cert = get_certificate(db, certificate_id, load_relations=False)
-    if not cert.imported and cert.status not in _DELETABLE_STATUSES:
+    if cert.managed_by_platform and cert.status not in _DELETABLE_STATUSES:
         raise ValidationAppError(
             f"Cannot delete a certificate with status '{cert.status}' — "
             "only failed, revoked or archived certificates can be deleted. "
@@ -747,7 +747,7 @@ def delete_certificate(db: Session, certificate_id: int, *, user: User | None = 
         except Exception as exc:  # noqa: BLE001
             logger.warning("File cleanup during delete failed: %s", exc)
 
-    if cert.imported and cert.fingerprint_sha256:
+    if not cert.managed_by_platform and cert.fingerprint_sha256:
         from app.models.job import DiscoveryIgnore
 
         already_ignored = (

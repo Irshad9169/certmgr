@@ -12,7 +12,7 @@ from cryptography.hazmat.primitives import serialization
 from sqlalchemy.orm import Session
 
 from app.core.logging import get_logger
-from app.core.timeutils import utcnow
+from app.core.timeutils import ensure_aware, utcnow
 from app.models.certificate import Certificate, CertificateDomain
 from app.models.enums import (
     AuditResult,
@@ -162,6 +162,10 @@ def run_network_scan(
 
     logs: list[str] = []
     found = 0
+    # Certificates a user deliberately deleted from tracking must stay
+    # gone — same set run_discovery() builds, so deleting a network-found
+    # certificate here also stops the next scan from just recreating it.
+    ignored_fingerprints = {i.fingerprint_sha256 for i in db.query(DiscoveryIgnore).all()}
     results = network_scanner.scan_targets(
         hosts, resolved_ports, concurrency=resolved_concurrency, timeout=resolved_timeout
     )
@@ -170,7 +174,7 @@ def run_network_scan(
             continue
         found += 1
         try:
-            _record_sighting(db, host, port, der, run, logs)
+            _record_sighting(db, host, port, der, run, logs, ignored_fingerprints)
         except Exception as exc:  # noqa: BLE001
             run.skipped_count = (run.skipped_count or 0) + 1
             logs.append(f"ERR {host}:{port}: {exc}")
@@ -204,7 +208,26 @@ def run_network_scan(
     return run
 
 
-def _record_sighting(db: Session, host: str, port: int, der: bytes, run: DiscoveryRun, logs: list[str]) -> None:
+def _validity_status(valid_until, *, threshold_days: int) -> str:
+    """Network-found certificates never go through issue/renew (no private
+    key, auto_renew is always False), so nothing else ever revisits their
+    status after creation — unlike platform-managed certs, which get a
+    fresh status on every renewal attempt. Compute it from the actual
+    validity window instead of a fixed placeholder, and recompute it on
+    every rescan too, so a cert that expires between scans is reflected
+    next time it's seen rather than staying frozen at whatever it was."""
+    if valid_until is None:
+        return CertificateStatus.DISCOVERED.value  # unknown validity window
+    remaining = ensure_aware(valid_until) - utcnow()
+    if remaining.total_seconds() <= 0:
+        return CertificateStatus.EXPIRED.value
+    if remaining.days <= threshold_days:
+        return CertificateStatus.EXPIRING.value
+    return CertificateStatus.ACTIVE.value
+
+
+def _record_sighting(db: Session, host: str, port: int, der: bytes, run: DiscoveryRun, logs: list[str],
+                     ignored_fingerprints: set[str]) -> None:
     from app.core.config import settings
     from app.services.storage import get_file_store
 
@@ -214,6 +237,10 @@ def _record_sighting(db: Session, host: str, port: int, der: bytes, run: Discove
         Certificate.fingerprint_sha256 == meta.fingerprint_sha256
     ).first()
     is_new = certificate is None
+
+    if is_new and meta.fingerprint_sha256 in ignored_fingerprints:
+        logs.append(f"SKIP ignored cert at {host}:{port} ({meta.fingerprint_sha256})")
+        return
 
     if is_new:
         store = get_file_store()
@@ -232,7 +259,7 @@ def _record_sighting(db: Session, host: str, port: int, der: bytes, run: Discove
             key_type=meta.key_type, key_size=meta.key_size,
             signature_algorithm=meta.signature_algorithm,
             valid_from=meta.valid_from, valid_until=meta.valid_until,
-            status=CertificateStatus.DISCOVERED.value,
+            status=_validity_status(meta.valid_until, threshold_days=settings.renewal_threshold_days),
             environment=settings.default_environment,
             provider_name="network-scan",
             imported=False,
@@ -258,6 +285,8 @@ def _record_sighting(db: Session, host: str, port: int, der: bytes, run: Discove
     if latest is not None and latest.certificate_id == certificate.id:
         latest.last_seen_at = now
         latest.discovery_run_id = run.id
+        if not certificate.managed_by_platform:
+            certificate.status = _validity_status(certificate.valid_until, threshold_days=settings.renewal_threshold_days)
     else:
         db.add(NetworkCertificateSighting(
             fingerprint_sha256=certificate.fingerprint_sha256,
