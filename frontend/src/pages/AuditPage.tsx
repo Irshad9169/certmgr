@@ -15,6 +15,7 @@ import {
   TablePagination,
   TableRow,
   TextField,
+  Tooltip,
   Typography,
 } from '@mui/material'
 import { api } from '../lib/api'
@@ -112,7 +113,14 @@ export default function AuditPage() {
                     <Typography variant="caption" sx={{ fontFamily: 'monospace' }}>{a.action}</Typography>
                   </TableCell>
                   <TableCell>
-                    <Typography variant="caption">{resourceLabel(a)}</Typography>
+                    <Tooltip title={resourceLabel(a)}>
+                      <Typography
+                        variant="caption"
+                        sx={{ display: 'block', maxWidth: 240, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+                      >
+                        {resourceLabel(a)}
+                      </Typography>
+                    </Tooltip>
                   </TableCell>
                   <TableCell><StatusChip value={a.result} /></TableCell>
                   <TableCell>{a.ip_address ?? '—'}</TableCell>
