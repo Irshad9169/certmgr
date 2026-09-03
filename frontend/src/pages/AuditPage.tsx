@@ -21,6 +21,22 @@ import { api } from '../lib/api'
 import type { AuditEntry, Page } from '../types'
 import { EmptyState, ErrorBox, Loading, PageHeader, StatusChip } from '../components/Shared'
 
+// `details` shapes vary by action (domain for certificates, server/hostname
+// for deployments, command_name for the command center, ...) — no single
+// resource-name column exists in the audit schema, so pick whichever
+// human-readable field is present rather than making the reader expand
+// "details" just to see what was acted on.
+const NAME_KEYS = ['domain', 'server', 'hostname', 'username', 'name', 'fingerprint', 'command_name']
+
+function resourceLabel(a: AuditEntry): string {
+  const base = a.resource_type ? `${a.resource_type}:${a.resource_id ?? ''}` : '—'
+  for (const key of NAME_KEYS) {
+    const value = a.details?.[key]
+    if (typeof value === 'string' && value) return `${base} (${value})`
+  }
+  return base
+}
+
 export default function AuditPage() {
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(50)
@@ -96,9 +112,7 @@ export default function AuditPage() {
                     <Typography variant="caption" sx={{ fontFamily: 'monospace' }}>{a.action}</Typography>
                   </TableCell>
                   <TableCell>
-                    <Typography variant="caption">
-                      {a.resource_type ? `${a.resource_type}:${a.resource_id ?? ''}` : '—'}
-                    </Typography>
+                    <Typography variant="caption">{resourceLabel(a)}</Typography>
                   </TableCell>
                   <TableCell><StatusChip value={a.result} /></TableCell>
                   <TableCell>{a.ip_address ?? '—'}</TableCell>
