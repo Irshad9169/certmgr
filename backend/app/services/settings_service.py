@@ -42,6 +42,10 @@ DEFAULT_SETTINGS: dict[str, tuple[str, bool, str]] = {
     "maintenance.message": ("", False, "Optional maintenance banner message"),
     "godaddy.api_key": ("", True, "GoDaddy API key (secret) — developer.godaddy.com"),
     "godaddy.api_secret": ("", True, "GoDaddy API secret (secret)"),
+    "tls_scan.default_ports": ("443,8443,636,465", False, "Default ports for network TLS scans (comma-separated)"),
+    "tls_scan.concurrency": ("20", False, "Concurrent connections during a network TLS scan"),
+    "tls_scan.timeout_seconds": ("3", False, "Per-connection timeout (seconds) during a network TLS scan"),
+    "tls_scan.max_targets": ("2048", False, "Max host×port combinations allowed in a single network TLS scan"),
 }
 
 

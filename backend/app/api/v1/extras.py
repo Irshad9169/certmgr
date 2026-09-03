@@ -9,7 +9,7 @@ from pydantic import BaseModel, Field
 from app.api.deps import CurrentUser, DbSession, get_client_ip, get_user_agent
 from app.api.permissions import P_, has_permission
 from app.core.config import settings
-from app.core.exceptions import NotFoundError, PermissionDeniedError
+from app.core.exceptions import NotFoundError, PermissionDeniedError, ValidationAppError
 from app.core.logging import get_logger
 from app.models.enums import AuditResult
 from app.services.audit_service import record
@@ -42,6 +42,55 @@ def trigger_discovery(db: DbSession, user: CurrentUser, request: Request,
     return {"status": "queued"}
 
 
+@discovery_router.post("/network-scan")
+def trigger_network_scan(db: DbSession, user: CurrentUser, request: Request, body: dict[str, Any]):
+    if not has_permission(user.role_name.value, P_["discovery"]["network_scan"]):
+        raise PermissionDeniedError("You are not authorized to run network scans")
+    targets = body.get("targets") or []
+    if not targets:
+        raise ValidationAppError("At least one target (IP, CIDR, or hostname) is required")
+    ports = body.get("ports")
+    concurrency = body.get("concurrency")
+    timeout_seconds = body.get("timeout_seconds")
+
+    from app.services.discovery_service import run_network_scan
+
+    if settings.celery_task_always_eager:
+        run = run_network_scan(db, targets=targets, ports=ports, concurrency=concurrency,
+                               timeout_seconds=timeout_seconds, created_by=user.id)
+        return {"run_id": run.id, "found": run.found_count, "imported": run.imported_count,
+                "skipped": run.skipped_count, "status": run.status}
+    from app.tasks.discovery import run_network_scan as run_network_scan_task
+
+    run_network_scan_task.delay(targets, ports, concurrency, timeout_seconds, user.id)
+    record(db, action="discovery.network_scan.trigger", user_id=user.id, username=user.username,
+           result=AuditResult.SUCCESS, ip_address=get_client_ip(request),
+           user_agent=get_user_agent(request))
+    return {"status": "queued"}
+
+
+@discovery_router.get("/network-sightings")
+def network_sightings(db: DbSession, user: CurrentUser, certificate_id: int | None = None,
+                      limit: int = Query(50, ge=1, le=500)):
+    if not has_permission(user.role_name.value, P_["discovery"]["view"]):
+        raise PermissionDeniedError("You are not authorized to view network scan results")
+    from app.models.job import NetworkCertificateSighting
+
+    q = db.query(NetworkCertificateSighting)
+    if certificate_id is not None:
+        q = q.filter(NetworkCertificateSighting.certificate_id == certificate_id)
+    rows = q.order_by(NetworkCertificateSighting.last_seen_at.desc()).limit(limit).all()
+    return [
+        {
+            "id": r.id, "certificate_id": r.certificate_id, "host": r.host, "port": r.port,
+            "sni_hostname": r.sni_hostname,
+            "first_seen_at": r.first_seen_at.isoformat() if r.first_seen_at else None,
+            "last_seen_at": r.last_seen_at.isoformat() if r.last_seen_at else None,
+        }
+        for r in rows
+    ]
+
+
 @discovery_router.get("/runs")
 def discovery_runs(db: DbSession, user: CurrentUser, limit: int = Query(20, ge=1, le=200)):
     from app.models.job import DiscoveryRun
@@ -50,6 +99,7 @@ def discovery_runs(db: DbSession, user: CurrentUser, limit: int = Query(20, ge=1
     return [
         {
             "id": r.id, "status": r.status, "scan_paths": r.scan_paths or [],
+            "scan_type": r.scan_type, "scan_targets": r.scan_targets or [], "scan_ports": r.scan_ports or [],
             "found": r.found_count, "imported": r.imported_count, "skipped": r.skipped_count,
             "log": (r.log or "")[-5000:],
             "started_at": r.started_at.isoformat() if r.started_at else None,

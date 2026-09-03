@@ -224,6 +224,37 @@ pipeline, and a handful of new operator-facing features.
 
 ---
 
+## [1.3.0] — 2026-09-03 — Network TLS scanner
+
+### Added
+- **Network TLS certificate discovery** — scan IP ranges/hostnames/CIDRs
+  across a port list (default 443, 8443, 636, 465, admin-configurable) and
+  record whatever certificate each live endpoint presents over a real TLS
+  handshake, regardless of trust (self-signed, expired, internal-CA
+  certificates are found too — that's the point: surfacing certificates
+  CertMgr didn't already know about, the actual "shadow cert" problem this
+  complements the existing filesystem-path discovery for). A
+  network-found certificate has no private key (impossible to extract from
+  a live handshake), so it's read-only inventory
+  (`status=discovered`) — visible, not renewable/deployable, unless
+  separately imported.
+- Certificate-rotation history: `network_certificate_sightings` records
+  every host:port a certificate was seen at, append-only — an endpoint's
+  certificate changing over time (self-signed → CA-issued, or a renewal)
+  is preserved as history rather than silently overwritten, visible on
+  each certificate's new "Seen on network" tab.
+- Admin-only permission (`discovery:network_scan`) — stricter than
+  filesystem discovery's `discovery:run` (granted to admin + certificate
+  manager), since scanning arbitrary IP ranges touches infrastructure
+  outside CertMgr's control and could be mistaken for unauthorized network
+  reconnaissance by security monitoring.
+- New Discovery page section (targets + ports input, pre-filled from the
+  admin-configured default ports setting) alongside the existing
+  filesystem-discovery UI; the runs table now shows a Filesystem/Network
+  type badge.
+
+---
+
 ## [Unreleased] — Planned
 
 - SSO: LDAP/AD, OpenID Connect, OAuth2, SAML (settings scaffolding exists).

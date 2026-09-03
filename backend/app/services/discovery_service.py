@@ -8,15 +8,23 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from cryptography.hazmat.primitives import serialization
 from sqlalchemy.orm import Session
 
 from app.core.logging import get_logger
 from app.core.timeutils import utcnow
-from app.models.certificate import Certificate
-from app.models.enums import AuditResult, JobStatus, JobTrigger, JobType
-from app.models.job import DiscoveryIgnore, DiscoveryRun, JobExecution
+from app.models.certificate import Certificate, CertificateDomain
+from app.models.enums import (
+    AuditResult,
+    CertificateStatus,
+    JobStatus,
+    JobTrigger,
+    JobType,
+    RenewalStatus,
+)
+from app.models.job import DiscoveryIgnore, DiscoveryRun, JobExecution, NetworkCertificateSighting
 from app.services.audit_service import record
-from app.services.certificate_service import import_from_paths
+from app.services.certificate_service import _cert_type_for, import_from_paths
 from app.services.x509_utils import parse_certificate, parse_pfx
 
 logger = get_logger(__name__)
@@ -103,6 +111,154 @@ def run_discovery(db: Session, *, extra_paths: list[str] | None = None,
            result=AuditResult.SUCCESS, details={"found": run.found_count, "imported": run.imported_count})
     db.commit()
     return run
+
+
+def _tls_scan_setting(db: Session | None, key: str, default: str) -> str:
+    from app.services.settings_service import get_setting
+
+    try:
+        return get_setting(db, key) or default
+    except Exception:  # noqa: BLE001, S110 — fall back to the hardcoded default
+        return default
+
+
+def run_network_scan(
+    db: Session,
+    *,
+    targets: list[str],
+    ports: list[int] | None = None,
+    concurrency: int | None = None,
+    timeout_seconds: float | None = None,
+    created_by: int | None = None,
+) -> DiscoveryRun:
+    """Scan hosts/CIDRs across a port list for live TLS certificates.
+
+    Unlike run_discovery() (filesystem paths, imports cert/key pairs it
+    finds), this never has a private key — network-found certificates are
+    read-only inventory entries (status=DISCOVERED), matching how a live TLS
+    handshake can never yield the peer's private key.
+    """
+    from app.services import network_scanner
+
+    resolved_ports = ports or [
+        int(p) for p in _tls_scan_setting(db, "tls_scan.default_ports", "443,8443,636,465").split(",") if p.strip()
+    ]
+    resolved_concurrency = concurrency or int(_tls_scan_setting(db, "tls_scan.concurrency", "20"))
+    resolved_timeout = timeout_seconds or float(_tls_scan_setting(db, "tls_scan.timeout_seconds", "3"))
+    max_targets = int(_tls_scan_setting(db, "tls_scan.max_targets", "2048"))
+
+    hosts = network_scanner.expand_targets(targets, max_targets=max_targets, port_count=len(resolved_ports))
+
+    run = DiscoveryRun(
+        started_at=utcnow(),
+        status="running",
+        scan_type="network",
+        scan_targets=targets,
+        scan_ports=resolved_ports,
+        created_by=created_by,
+    )
+    db.add(run)
+    db.commit()
+
+    logs: list[str] = []
+    found = 0
+    results = network_scanner.scan_targets(
+        hosts, resolved_ports, concurrency=resolved_concurrency, timeout=resolved_timeout
+    )
+    for host, port, der in results:
+        if der is None:
+            continue
+        found += 1
+        try:
+            _record_sighting(db, host, port, der, run, logs)
+        except Exception as exc:  # noqa: BLE001
+            run.skipped_count = (run.skipped_count or 0) + 1
+            logs.append(f"ERR {host}:{port}: {exc}")
+
+    run.found_count = found
+    run.status = "completed"
+    run.finished_at = utcnow()
+    # Only FOUND/ROTATED/ERR lines are logged (see _record_sighting) — the
+    # common case (closed port, or an already-known cert unchanged) is
+    # silent, so signal isn't buried across up to max_targets endpoints.
+    run.log = "\n".join(logs[-500:]) or "No certificates found."
+    db.commit()
+
+    db.add(JobExecution(
+        job_type=JobType.NETWORK_SCAN.value, trigger=JobTrigger.SCHEDULER.value,
+        status=JobStatus.SUCCESS.value, started_at=run.started_at, finished_at=run.finished_at,
+        stdout=run.log, created_by=created_by,
+    ))
+    record(db, action="discovery.network_scan", resource_type="discovery", resource_id=run.id,
+           result=AuditResult.SUCCESS, details={"found": run.found_count, "imported": run.imported_count})
+    db.commit()
+    return run
+
+
+def _record_sighting(db: Session, host: str, port: int, der: bytes, run: DiscoveryRun, logs: list[str]) -> None:
+    from app.core.config import settings
+    from app.services.storage import get_file_store
+
+    cert_obj, meta = parse_certificate(der)
+
+    certificate = db.query(Certificate).filter(
+        Certificate.fingerprint_sha256 == meta.fingerprint_sha256
+    ).first()
+    is_new = certificate is None
+
+    if is_new:
+        store = get_file_store()
+        store_dir = store.cert_dir(meta.fingerprint_sha256)
+        primary = meta.sans[0] if meta.sans else host
+        (store_dir / "cert.pem").write_bytes(cert_obj.public_bytes(serialization.Encoding.PEM))
+
+        certificate = Certificate(
+            domain=primary,
+            sans=meta.sans or [primary],
+            is_wildcard=meta.is_wildcard,
+            cert_type=_cert_type_for(meta.sans or [primary]),
+            subject=meta.subject, issuer=meta.issuer, serial_number=meta.serial_number,
+            fingerprint_sha256=meta.fingerprint_sha256,
+            public_key_algorithm=meta.public_key_algorithm,
+            key_type=meta.key_type, key_size=meta.key_size,
+            signature_algorithm=meta.signature_algorithm,
+            valid_from=meta.valid_from, valid_until=meta.valid_until,
+            status=CertificateStatus.DISCOVERED.value,
+            environment=settings.default_environment,
+            provider_name="network-scan",
+            imported=False,
+            auto_renew=False,
+            renewal_status=RenewalStatus.NONE.value,
+            cert_path=str(store_dir / "cert.pem"),
+            managed_by_platform=False,
+        )
+        db.add(certificate)
+        db.flush()
+        for idx, d in enumerate(certificate.sans):
+            db.add(CertificateDomain(certificate_id=certificate.id, domain=d, is_primary=(idx == 0)))
+        run.imported_count = (run.imported_count or 0) + 1
+        logs.append(f"FOUND new cert at {host}:{port} ({certificate.fingerprint_sha256})")
+
+    latest = (
+        db.query(NetworkCertificateSighting)
+        .filter(NetworkCertificateSighting.host == host, NetworkCertificateSighting.port == port)
+        .order_by(NetworkCertificateSighting.id.desc())
+        .first()
+    )
+    now = utcnow()
+    if latest is not None and latest.certificate_id == certificate.id:
+        latest.last_seen_at = now
+        latest.discovery_run_id = run.id
+    else:
+        db.add(NetworkCertificateSighting(
+            fingerprint_sha256=certificate.fingerprint_sha256,
+            certificate_id=certificate.id,
+            host=host, port=port,
+            first_seen_at=now, last_seen_at=now,
+            discovery_run_id=run.id,
+        ))
+        if latest is not None:
+            logs.append(f"ROTATED cert at {host}:{port} (was cert #{latest.certificate_id}, now #{certificate.id})")
 
 
 def _walk(root: Path, run: DiscoveryRun, db: Session, seen: set[str], logs: list[str]) -> int:

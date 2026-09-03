@@ -63,6 +63,42 @@ class DiscoveryRun(Base, IntPkMixin):
     skipped_count: Mapped[int] = mapped_column(Integer, default=0)
     log: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_by: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # "filesystem" (default, existing runs) or "network" — a network scan has
+    # no scan_paths; it has scan_targets (hosts/CIDRs) + scan_ports instead.
+    scan_type: Mapped[str] = mapped_column(String(16), default="filesystem", nullable=False)
+    scan_targets: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    scan_ports: Mapped[list | None] = mapped_column(JSON, nullable=True)
+
+
+class NetworkCertificateSighting(Base, IntPkMixin):
+    """A certificate observed via a live TLS handshake at host:port.
+
+    Append-only, not upserted-in-place: an endpoint's certificate can rotate
+    over time (self-signed today, CA-issued next month), and that history is
+    exactly what a network scanner uniquely surfaces over filesystem
+    discovery. A scan updates `last_seen_at` in place only when the same
+    certificate is still being served at that (host, port); a change in
+    certificate_id (or no prior row) inserts a new row instead.
+    """
+
+    __tablename__ = "network_certificate_sightings"
+    __table_args__ = (
+        Index("ix_sighting_host_port", "host", "port"),
+        Index("ix_sighting_cert", "certificate_id"),
+    )
+
+    fingerprint_sha256: Mapped[str] = mapped_column(String(96), index=True)
+    certificate_id: Mapped[int] = mapped_column(
+        ForeignKey("certificates.id", ondelete="CASCADE"), nullable=False
+    )
+    host: Mapped[str] = mapped_column(String(255), nullable=False)
+    port: Mapped[int] = mapped_column(Integer, nullable=False)
+    sni_hostname: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    first_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    discovery_run_id: Mapped[int | None] = mapped_column(
+        ForeignKey("discovery_runs.id", ondelete="SET NULL"), nullable=True
+    )
 
 
 class DiscoveryIgnore(Base, IntPkMixin, TimestampMixin):

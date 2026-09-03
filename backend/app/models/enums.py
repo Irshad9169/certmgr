@@ -177,6 +177,7 @@ class JobType(StrEnum):
     CLEANUP = "cleanup"
     HEALTH = "health"
     REPORTS = "reports"
+    NETWORK_SCAN = "network_scan"
 
 
 class JobStatus(StrEnum):

@@ -19,6 +19,7 @@ _scheduler: BackgroundScheduler | None = None
 # Maps ScheduledJob.job_type → Celery task name
 _JOB_TYPE_TASK = {
     "discovery": "app.tasks.discovery.run_discovery",
+    "network_scan": "app.tasks.discovery.run_network_scan",
     "renewal": "app.tasks.certificates.renew_due",
     "health": "app.tasks.maintenance.health_scan",
     "compliance": "app.tasks.maintenance.compliance_report",
@@ -39,6 +40,10 @@ def _dispatch(job_type: str, config: dict | None = None) -> None:
             from app.services.discovery_service import run_discovery
 
             run_discovery(db, extra_paths=config.get("paths"))
+        elif job_type == "network_scan":
+            from app.services.discovery_service import run_network_scan
+
+            run_network_scan(db, targets=config.get("targets", []), ports=config.get("ports"))
         elif job_type == "renewal":
             from app.models.enums import JobTrigger
             from app.services.certificate_service import due_certificates, renew_certificate

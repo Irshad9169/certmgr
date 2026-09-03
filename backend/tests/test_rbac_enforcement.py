@@ -79,6 +79,29 @@ def test_read_only_cannot_trigger_discovery(client, role_headers_factory):
     assert resp.status_code == 403
 
 
+def test_cert_manager_cannot_trigger_network_scan(client, role_headers_factory):
+    """Network scanning is admin-only — stricter than discovery:run (which
+    cert_manager does have), since it touches infrastructure outside
+    CertMgr's control rather than just local filesystem paths."""
+    headers = role_headers_factory("cm_netscan", "certificate_manager")
+    resp = client.post("/api/v1/discovery/network-scan", headers=headers,
+                       json={"targets": ["127.0.0.1"], "ports": [1]})
+    assert resp.status_code == 403
+
+
+def test_read_only_cannot_trigger_network_scan(client, role_headers_factory):
+    headers = role_headers_factory("ro_netscan", "read_only")
+    resp = client.post("/api/v1/discovery/network-scan", headers=headers,
+                       json={"targets": ["127.0.0.1"], "ports": [1]})
+    assert resp.status_code == 403
+
+
+def test_admin_can_trigger_network_scan(client, admin_headers):
+    resp = client.post("/api/v1/discovery/network-scan", headers=admin_headers,
+                       json={"targets": ["127.0.0.1"], "ports": [1], "timeout_seconds": 1})
+    assert resp.status_code == 200, resp.text
+
+
 def test_operator_cannot_run_health_scan(client, role_headers_factory):
     """OPERATOR has health:view but not health:run."""
     headers = role_headers_factory("op_health", "operator")

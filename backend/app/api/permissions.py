@@ -51,6 +51,12 @@ P_ = {
     "discovery": {
         "run": "discovery:run",
         "view": "discovery:view",
+        # Admin-only (see RoleName.ADMIN's catch-all below — deliberately
+        # NOT listed in CERT_MANAGER/OPERATOR/READ_ONLY's explicit sets,
+        # matching the same pattern as server:command): scanning arbitrary
+        # IP ranges touches infrastructure outside CertMgr's control and
+        # could be mistaken for unauthorized network reconnaissance.
+        "network_scan": "discovery:network_scan",
     },
     "health": {
         "view": "health:view",

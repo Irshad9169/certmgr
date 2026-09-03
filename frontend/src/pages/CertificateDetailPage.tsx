@@ -40,6 +40,16 @@ import { useAuth } from '../lib/auth-context'
 
 const DELETABLE_STATUSES = ['failed', 'revoked', 'archived']
 
+interface NetworkSighting {
+  id: number
+  certificate_id: number
+  host: string
+  port: number
+  sni_hostname: string | null
+  first_seen_at?: string
+  last_seen_at?: string
+}
+
 export default function CertificateDetailPage() {
   const { id } = useParams()
   const certId = Number(id)
@@ -65,6 +75,12 @@ export default function CertificateDetailPage() {
     queryKey: ['cert-deployments', certId],
     queryFn: () => api.get<Page<Deployment>>('/deployments', { params: { certificate_id: certId, page_size: 50 } }).then((r) => r.data),
     enabled: tab === 2,
+  })
+  const sightings = useQuery({
+    queryKey: ['cert-network-sightings', certId],
+    queryFn: () =>
+      api.get<NetworkSighting[]>('/discovery/network-sightings', { params: { certificate_id: certId } }).then((r) => r.data),
+    enabled: tab === 3,
   })
   const servers = useQuery({
     queryKey: ['servers-min'],
@@ -222,6 +238,7 @@ export default function CertificateDetailPage() {
           <Tab label="Execution history" />
           <Tab label="Deployments" />
           <Tab label="Downloads" />
+          <Tab label="Seen on network" />
         </Tabs>
       </Paper>
 
@@ -338,6 +355,41 @@ export default function CertificateDetailPage() {
           </CardContent>
         </Card>
       )}
+
+      {tab === 3 &&
+        (sightings.isLoading ? <Loading /> : (
+          <TableContainer component={Paper}>
+            <Table size="small">
+              <TableHead>
+                <TableRow>
+                  <TableCell>Host</TableCell>
+                  <TableCell>Port</TableCell>
+                  <TableCell>SNI hostname</TableCell>
+                  <TableCell>First seen</TableCell>
+                  <TableCell>Last seen</TableCell>
+                </TableRow>
+              </TableHead>
+              <TableBody>
+                {(sightings.data ?? []).map((s) => (
+                  <TableRow key={s.id}>
+                    <TableCell>{s.host}</TableCell>
+                    <TableCell>{s.port}</TableCell>
+                    <TableCell>{s.sni_hostname ?? '—'}</TableCell>
+                    <TableCell>{s.first_seen_at ? new Date(s.first_seen_at).toLocaleString() : '—'}</TableCell>
+                    <TableCell>{s.last_seen_at ? new Date(s.last_seen_at).toLocaleString() : '—'}</TableCell>
+                  </TableRow>
+                ))}
+                {(sightings.data ?? []).length === 0 && (
+                  <TableRow>
+                    <TableCell colSpan={5} align="center">
+                      Not seen via a network scan — see Discovery → Network scan
+                    </TableCell>
+                  </TableRow>
+                )}
+              </TableBody>
+            </Table>
+          </TableContainer>
+        ))}
 
       <ConfirmDialog
         open={confirm === 'renew'}
