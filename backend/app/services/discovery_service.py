@@ -179,9 +179,18 @@ def run_network_scan(
     run.status = "completed"
     run.finished_at = utcnow()
     # Only FOUND/ROTATED/ERR lines are logged (see _record_sighting) — the
-    # common case (closed port, or an already-known cert unchanged) is
-    # silent, so signal isn't buried across up to max_targets endpoints.
-    run.log = "\n".join(logs[-500:]) or "No certificates found."
+    # common case (an already-known cert unchanged) is silent, so signal
+    # isn't buried across up to max_targets endpoints. That means an empty
+    # `logs` list is ambiguous by itself: it's both "found nothing" (closed
+    # ports only) and "found N already-known certs, nothing changed" — use
+    # `found` to tell those apart rather than always falling back to
+    # "No certificates found."
+    if logs:
+        run.log = "\n".join(logs[-500:])
+    elif found:
+        run.log = f"{found} certificate(s) found, all already known and unchanged."
+    else:
+        run.log = "No certificates found."
     db.commit()
 
     db.add(JobExecution(

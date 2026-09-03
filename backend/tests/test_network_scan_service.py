@@ -123,6 +123,13 @@ def test_rescan_same_endpoint_reuses_row_no_duplicate(db, tls_server):
     assert len(sightings) == 1  # no duplicate row — same row, last_seen_at bumped
     assert ensure_aware(sightings[0].last_seen_at) >= ensure_aware(first_seen_at)
 
+    # Regression: found=1 but nothing changed (the common rescan case) must
+    # not be reported as "No certificates found." — that contradicts found
+    # count and was confusing in practice (found on test05 2026-09-03).
+    assert run2.found_count == 1
+    assert "No certificates found." not in run2.log
+    assert "1 certificate" in run2.log
+
 
 def test_cert_rotation_at_same_endpoint_preserves_history(db, tls_server):
     run_network_scan(db, targets=["127.0.0.1"], ports=[tls_server.port], concurrency=2, timeout_seconds=2)

@@ -238,6 +238,20 @@ def test_revoke_flow(db, admin_user, monkeypatch, tmp_path):
     assert cert.status == "revoked"
 
 
+def test_revoke_unregistered_provider_rejected_cleanly(db, sample_certificate):
+    """Revoke on a cert with no registered provider (imported, or
+    network-scan discovered) must raise a clean ValidationAppError, not an
+    unhandled KeyError from the provider registry (found via a real network
+    scan on 2026-09-03 — Revoke had no guard, unlike renew_certificate's
+    managed_by_platform check)."""
+    cert = import_certificate(db, cert_data=sample_certificate["cert_pem"],
+                              key_data=sample_certificate["key_pem"])
+    assert cert.provider_name not in ("letsencrypt", "openssl-ca")  # confirms this is the real gap
+
+    with pytest.raises(ValidationAppError):
+        revoke_certificate(db, cert.id)
+
+
 def test_delete_revoked_certificate(db, sample_certificate, admin_user):
     cert = import_certificate(db, cert_data=sample_certificate["cert_pem"],
                               key_data=sample_certificate["key_pem"])

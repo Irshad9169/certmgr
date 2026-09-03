@@ -39,6 +39,7 @@ export interface Certificate {
   last_renewed_at?: string | null
   imported: boolean
   staging: boolean
+  managed_by_platform: boolean
   owner_id?: number | null
   notes?: string | null
   favorite: boolean

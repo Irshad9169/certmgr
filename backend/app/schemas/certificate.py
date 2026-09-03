@@ -108,6 +108,7 @@ class CertificateOut(BaseModel):
     last_renewed_at: datetime | None
     imported: bool
     staging: bool
+    managed_by_platform: bool
     owner_id: int | None
     notes: str | None
     favorite: bool

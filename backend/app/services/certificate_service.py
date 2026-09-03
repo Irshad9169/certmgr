@@ -661,7 +661,13 @@ def revoke_certificate(db: Session, certificate_id: int, *, reason: str = "unspe
                        delete_after: bool = True, user: User | None = None,
                        trigger: str = JobTrigger.API.value) -> JobExecution:
     cert = get_certificate(db, certificate_id, load_relations=False)
-    provider = _provider_for(db, cert)
+    try:
+        provider = _provider_for(db, cert)
+    except KeyError as exc:
+        raise ValidationAppError(
+            f"Cannot revoke: no registered provider for '{cert.provider_name}' — this "
+            "certificate was imported or discovered, not issued through CertMgr"
+        ) from exc
 
     result = provider.revoke(cert.cert_path or "", reason=reason)
     execution = JobExecution(

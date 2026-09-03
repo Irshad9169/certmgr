@@ -161,13 +161,13 @@ export default function CertificateDetailPage() {
         subtitle={`Certificate #${c.id} · ${c.cert_type} · ${c.provider_name}`}
         actions={
           <>
-            {can('certificate:renew') && (
+            {can('certificate:renew') && c.managed_by_platform && (
               <Button startIcon={<AutorenewIcon />} onClick={() => setConfirm('renew')}>Renew</Button>
             )}
             {can('certificate:deploy') && (
               <Button startIcon={<RocketLaunchIcon />} onClick={() => setConfirm('deploy')}>Deploy</Button>
             )}
-            {can('certificate:revoke') && !DELETABLE_STATUSES.includes(c.status) && (
+            {can('certificate:revoke') && c.managed_by_platform && !DELETABLE_STATUSES.includes(c.status) && (
               <Button color="error" startIcon={<BlockIcon />} onClick={() => setConfirm('revoke')}>Revoke</Button>
             )}
             {can('certificate:delete') && DELETABLE_STATUSES.includes(c.status) && (
