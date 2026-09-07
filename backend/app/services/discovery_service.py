@@ -17,12 +17,20 @@ from app.models.certificate import Certificate, CertificateDomain
 from app.models.enums import (
     AuditResult,
     CertificateStatus,
+    FindingStatus,
     JobStatus,
     JobTrigger,
     JobType,
     RenewalStatus,
 )
-from app.models.job import DiscoveryIgnore, DiscoveryRun, JobExecution, NetworkCertificateSighting
+from app.models.finding import CTFinding
+from app.models.job import (
+    CTObservation,
+    DiscoveryIgnore,
+    DiscoveryRun,
+    JobExecution,
+    NetworkCertificateSighting,
+)
 from app.services.audit_service import record
 from app.services.certificate_service import _cert_type_for, import_from_paths
 from app.services.x509_utils import parse_certificate, parse_pfx
@@ -297,6 +305,230 @@ def _record_sighting(db: Session, host: str, port: int, der: bytes, run: Discove
         ))
         if latest is not None:
             logs.append(f"ROTATED cert at {host}:{port} (was cert #{latest.certificate_id}, now #{certificate.id})")
+
+
+def run_ct_monitor(
+    db: Session,
+    *,
+    domains: list[str],
+    expected_issuers: list[str] | None = None,
+    sensitive_keywords: list[str] | None = None,
+    staging_keywords: list[str] | None = None,
+    max_certs_per_domain: int | None = None,
+    created_by: int | None = None,
+) -> DiscoveryRun:
+    """Query crt.sh for admin-configured domains and turn what comes back
+    into inventory + investigable Findings.
+
+    Unlike run_network_scan() (what's reachable), this finds what's been
+    *issued* — including a certificate that was never deployed anywhere,
+    e.g. a mis-issued/rogue certificate for your domain from an unexpected CA.
+    """
+    from app.services import ct_monitor
+
+    resolved_expected_issuers = expected_issuers if expected_issuers is not None else [
+        e for e in _tls_scan_setting(db, "ct_monitoring.expected_issuers", "").split(",") if e.strip()
+    ]
+    resolved_sensitive = sensitive_keywords if sensitive_keywords is not None else [
+        k for k in _tls_scan_setting(
+            db, "ct_monitoring.sensitive_keywords",
+            "admin,vpn,sso,login,auth,portal,mail,owa,gateway,remote,internal,secure",
+        ).split(",") if k.strip()
+    ]
+    resolved_staging = staging_keywords if staging_keywords is not None else [
+        k for k in _tls_scan_setting(
+            db, "ct_monitoring.staging_keywords",
+            "dev,test,qa,uat,stage,staging,sandbox,preprod,demo,lab",
+        ).split(",") if k.strip()
+    ]
+    max_certs = max_certs_per_domain or int(_tls_scan_setting(db, "ct_monitoring.max_certs_per_domain", "200"))
+
+    run = DiscoveryRun(
+        started_at=utcnow(),
+        status="running",
+        scan_type="ct_log",
+        scan_domains=domains,
+        created_by=created_by,
+    )
+    db.add(run)
+    db.commit()
+
+    logs: list[str] = []
+    found = 0
+    ignored_fingerprints = {i.fingerprint_sha256 for i in db.query(DiscoveryIgnore).all()}
+    known_crt_sh_ids = {o.crt_sh_id for o in db.query(CTObservation).all()}
+
+    for domain in domains:
+        entries = ct_monitor.fetch_crtsh_entries(domain, limit=max_certs)
+        for entry in entries:
+            try:
+                crt_sh_id = int(entry.get("id"))
+            except (TypeError, ValueError):
+                continue
+            found += 1
+            try:
+                _record_ct_observation(
+                    db, domain, crt_sh_id, run, logs,
+                    ignored_fingerprints=ignored_fingerprints,
+                    known_crt_sh_ids=known_crt_sh_ids,
+                    monitored_domains=domains,
+                    expected_issuers=resolved_expected_issuers,
+                    sensitive_keywords=resolved_sensitive,
+                    staging_keywords=resolved_staging,
+                )
+            except Exception as exc:  # noqa: BLE001
+                run.skipped_count = (run.skipped_count or 0) + 1
+                logs.append(f"ERR {domain} crt.sh id={crt_sh_id}: {exc}")
+
+    run.found_count = found
+    run.status = "completed"
+    run.finished_at = utcnow()
+    if logs:
+        run.log = "\n".join(logs[-500:])
+    elif found:
+        run.log = f"{found} CT entries found, all already known and unchanged."
+    else:
+        run.log = "No certificates found."
+    db.commit()
+
+    db.add(JobExecution(
+        job_type=JobType.CT_MONITOR.value, trigger=JobTrigger.SCHEDULER.value,
+        status=JobStatus.SUCCESS.value, started_at=run.started_at, finished_at=run.finished_at,
+        stdout=run.log, created_by=created_by,
+    ))
+    record(db, action="discovery.ct_monitor", resource_type="discovery", resource_id=run.id,
+           result=AuditResult.SUCCESS, details={"found": run.found_count, "imported": run.imported_count})
+    db.commit()
+    return run
+
+
+def _record_ct_observation(
+    db: Session, domain: str, crt_sh_id: int, run: DiscoveryRun, logs: list[str],
+    *, ignored_fingerprints: set[str], known_crt_sh_ids: set[int], monitored_domains: list[str],
+    expected_issuers: list[str], sensitive_keywords: list[str], staging_keywords: list[str],
+) -> None:
+    from app.core.config import settings
+    from app.services import ct_monitor
+    from app.services.storage import get_file_store
+
+    if crt_sh_id in known_crt_sh_ids:
+        # An immutable historical record — no need to re-fetch/re-parse.
+        obs = db.query(CTObservation).filter(CTObservation.crt_sh_id == crt_sh_id).first()
+        if obs is not None:
+            obs.last_seen_at = utcnow()
+            obs.ct_monitor_run_id = run.id
+        return
+
+    pem = ct_monitor.fetch_crtsh_certificate_pem(crt_sh_id)
+    if pem is None:
+        run.skipped_count = (run.skipped_count or 0) + 1
+        logs.append(f"SKIP crt.sh id={crt_sh_id}: could not fetch certificate")
+        return
+    cert_obj, meta = parse_certificate(pem)
+
+    if meta.fingerprint_sha256 in ignored_fingerprints:
+        logs.append(f"SKIP ignored cert (crt.sh id={crt_sh_id}, {meta.fingerprint_sha256})")
+        return
+
+    match_type = ct_monitor.classify_domain_match(domain, monitored_domains)
+    matched_name = meta.sans[0] if meta.sans else domain
+
+    certificate = db.query(Certificate).filter(
+        Certificate.fingerprint_sha256 == meta.fingerprint_sha256
+    ).first()
+    is_new = certificate is None
+
+    if is_new:
+        store = get_file_store()
+        store_dir = store.cert_dir(meta.fingerprint_sha256)
+        primary = meta.sans[0] if meta.sans else domain
+        (store_dir / "cert.pem").write_bytes(cert_obj.public_bytes(serialization.Encoding.PEM))
+
+        certificate = Certificate(
+            domain=primary,
+            sans=meta.sans or [primary],
+            is_wildcard=meta.is_wildcard,
+            cert_type=_cert_type_for(meta.sans or [primary]),
+            subject=meta.subject, issuer=meta.issuer, serial_number=meta.serial_number,
+            fingerprint_sha256=meta.fingerprint_sha256,
+            public_key_algorithm=meta.public_key_algorithm,
+            key_type=meta.key_type, key_size=meta.key_size,
+            signature_algorithm=meta.signature_algorithm,
+            valid_from=meta.valid_from, valid_until=meta.valid_until,
+            status=_validity_status(meta.valid_until, threshold_days=settings.renewal_threshold_days),
+            environment=settings.default_environment,
+            provider_name="ct-log",
+            imported=False,
+            auto_renew=False,
+            renewal_status=RenewalStatus.NONE.value,
+            cert_path=str(store_dir / "cert.pem"),
+            managed_by_platform=False,
+        )
+        db.add(certificate)
+        db.flush()
+        for idx, d in enumerate(certificate.sans):
+            db.add(CertificateDomain(certificate_id=certificate.id, domain=d, is_primary=(idx == 0)))
+        run.imported_count = (run.imported_count or 0) + 1
+        logs.append(f"FOUND new cert via CT for {domain} ({certificate.fingerprint_sha256})")
+
+    now = utcnow()
+    db.add(CTObservation(
+        certificate_id=certificate.id,
+        crt_sh_id=crt_sh_id,
+        matched_domain=domain,
+        first_seen_at=now, last_seen_at=now,
+        ct_monitor_run_id=run.id,
+    ))
+
+    detections = ct_monitor.run_detections(
+        meta, matched_name, is_new=is_new,
+        expected_issuers=expected_issuers, sensitive_keywords=sensitive_keywords,
+        staging_keywords=staging_keywords,
+    )
+    if not detections:
+        return
+
+    score = ct_monitor.risk_score_for(detections)
+    severity = ct_monitor.risk_severity(score)
+
+    # One correlated finding per certificate, not one per detection/scan —
+    # only terminal-status findings (false_positive/resolved) get a fresh
+    # replacement; an active one (open/acknowledged/investigating) just gets
+    # its evidence refreshed, status untouched (never silently reopen work
+    # an analyst is already engaged with).
+    active_finding = (
+        db.query(CTFinding)
+        .filter(
+            CTFinding.certificate_id == certificate.id,
+            CTFinding.status.in_([
+                FindingStatus.OPEN.value, FindingStatus.ACKNOWLEDGED.value, FindingStatus.INVESTIGATING.value,
+            ]),
+        )
+        .order_by(CTFinding.id.desc())
+        .first()
+    )
+    if active_finding is not None:
+        active_finding.last_seen_at = now
+        active_finding.detections = detections
+        active_finding.risk_score = score
+        active_finding.severity = severity
+        active_finding.ct_monitor_run_id = run.id
+    else:
+        db.add(CTFinding(
+            certificate_id=certificate.id,
+            domain=matched_name,
+            match_type=match_type,
+            detections=detections,
+            risk_score=score,
+            severity=severity,
+            status=FindingStatus.OPEN.value,
+            first_seen_at=now, last_seen_at=now,
+            ct_monitor_run_id=run.id,
+        ))
+        logs.append(
+            f"FINDING {severity.upper()} for {matched_name} (score={score}): "
+            f"{', '.join(d['code'] for d in detections)}"
+        )
 
 
 def _walk(root: Path, run: DiscoveryRun, db: Session, seen: set[str], logs: list[str]) -> int:

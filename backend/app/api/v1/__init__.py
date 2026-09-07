@@ -6,6 +6,7 @@ from app.api.v1 import (
     certificates,
     dashboard,
     deployments,
+    findings,
     hooks,
     jobs,
     notifications,
@@ -28,7 +29,7 @@ from app.api.v1.extras import (
 
 __all__ = [
     "ai_router", "audit", "auth", "backups_router", "certificates", "compliance_router",
-    "dashboard", "deployments", "discovery_router", "health_router", "hooks", "jobs",
+    "dashboard", "deployments", "discovery_router", "findings", "health_router", "hooks", "jobs",
     "notifications", "providers_router", "reports_router", "scheduled_jobs_router",
     "search_router", "servers", "settings", "users", "webhooks_router",
 ]

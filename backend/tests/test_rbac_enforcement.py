@@ -102,6 +102,42 @@ def test_admin_can_trigger_network_scan(client, admin_headers):
     assert resp.status_code == 200, resp.text
 
 
+def test_cert_manager_cannot_trigger_ct_monitor(client, role_headers_factory):
+    """CT monitoring is admin-only, same rationale as network_scan."""
+    headers = role_headers_factory("cm_ctmon", "certificate_manager")
+    resp = client.post("/api/v1/discovery/ct-monitor", headers=headers, json={"domains": ["example.com"]})
+    assert resp.status_code == 403
+
+
+def test_read_only_cannot_trigger_ct_monitor(client, role_headers_factory):
+    headers = role_headers_factory("ro_ctmon", "read_only")
+    resp = client.post("/api/v1/discovery/ct-monitor", headers=headers, json={"domains": ["example.com"]})
+    assert resp.status_code == 403
+
+
+def test_admin_can_trigger_ct_monitor(client, admin_headers, monkeypatch):
+    from app.services import ct_monitor
+
+    monkeypatch.setattr(ct_monitor, "fetch_crtsh_entries", lambda domain, *, limit, timeout=15.0: [])
+    resp = client.post("/api/v1/discovery/ct-monitor", headers=admin_headers, json={"domains": ["example.com"]})
+    assert resp.status_code == 200, resp.text
+
+
+def test_read_only_can_view_findings_but_not_manage(client, role_headers_factory):
+    headers = role_headers_factory("ro_findings", "read_only")
+    resp = client.get("/api/v1/findings", headers=headers)
+    assert resp.status_code == 200, resp.text
+    resp = client.patch("/api/v1/findings/999999", headers=headers, json={"status": "resolved"})
+    assert resp.status_code == 403
+
+
+def test_operator_cannot_manage_findings(client, role_headers_factory):
+    """OPERATOR has finding:view (via discovery:view-tier access) but not finding:manage."""
+    headers = role_headers_factory("op_findings", "operator")
+    resp = client.patch("/api/v1/findings/999999", headers=headers, json={"status": "resolved"})
+    assert resp.status_code == 403
+
+
 def test_operator_cannot_run_health_scan(client, role_headers_factory):
     """OPERATOR has health:view but not health:run."""
     headers = role_headers_factory("op_health", "operator")

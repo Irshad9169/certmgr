@@ -36,6 +36,7 @@ import DescriptionIcon from '@mui/icons-material/Description'
 import SmartToyIcon from '@mui/icons-material/SmartToy'
 import LogoutIcon from '@mui/icons-material/Logout'
 import ShieldIcon from '@mui/icons-material/Shield'
+import SecurityIcon from '@mui/icons-material/Security'
 import { useAuth } from '../lib/auth-context'
 
 const DRAWER_WIDTH = 248
@@ -55,6 +56,7 @@ const NAV: NavItem[] = [
   { to: '/servers', label: 'Servers', icon: <DnsIcon /> },
   { to: '/deployments', label: 'Deployments', icon: <RocketLaunchIcon /> },
   { to: '/discovery', label: 'Discovery', icon: <TravelExploreIcon /> },
+  { to: '/findings', label: 'Findings', icon: <SecurityIcon /> },
   { to: '/hooks', label: 'Hooks', icon: <TuneIcon /> },
   { to: '/notifications', label: 'Notifications', icon: <NotificationsIcon /> },
   { to: '/compliance', label: 'Compliance', icon: <FactCheckIcon /> },

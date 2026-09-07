@@ -44,6 +44,17 @@ const STATUS_COLORS: Record<string, 'success' | 'error' | 'warning' | 'info' | '
   non_compliant: 'error',
   sent: 'success',
   delivered: 'success',
+  // Finding status
+  open: 'warning',
+  acknowledged: 'info',
+  investigating: 'info',
+  false_positive: 'default',
+  resolved: 'success',
+  // Finding severity
+  informational: 'default',
+  low: 'info',
+  medium: 'warning',
+  high: 'error',
 }
 
 export function StatusChip({ value }: { value?: string | null }) {

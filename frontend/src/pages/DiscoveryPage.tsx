@@ -22,6 +22,7 @@ import {
 import TravelExploreIcon from '@mui/icons-material/TravelExplore'
 import RestoreIcon from '@mui/icons-material/Restore'
 import RouterIcon from '@mui/icons-material/Router'
+import SecurityIcon from '@mui/icons-material/Security'
 import { api, apiErrorMessage } from '../lib/api'
 import { EmptyState, ErrorBox, Loading, PageHeader, StatusChip, Toast } from '../components/Shared'
 import { useAuth } from '../lib/auth-context'
@@ -29,10 +30,11 @@ import { useAuth } from '../lib/auth-context'
 interface DiscoveryRun {
   id: number
   status: string
-  scan_type: 'filesystem' | 'network'
+  scan_type: 'filesystem' | 'network' | 'ct_log'
   scan_paths: string[]
   scan_targets: string[]
   scan_ports: number[]
+  scan_domains: string[]
   found: number
   imported: number
   skipped: number
@@ -55,9 +57,11 @@ export default function DiscoveryPage() {
   const [paths, setPaths] = useState('')
   const [networkTargets, setNetworkTargets] = useState('')
   const [networkPorts, setNetworkPorts] = useState('')
+  const [ctDomains, setCtDomains] = useState('')
   const [toast, setToast] = useState<{ message: string; severity: 'success' | 'error' } | null>(null)
 
   const canNetworkScan = can('discovery:network_scan')
+  const canCtMonitor = can('discovery:ct_monitor')
 
   const { data, isLoading, error, refetch } = useQuery({
     queryKey: ['discovery-runs'],
@@ -116,6 +120,20 @@ export default function DiscoveryPage() {
       }),
     onSuccess: () => {
       setToast({ message: 'Network scan triggered', severity: 'success' })
+      qc.invalidateQueries({ queryKey: ['discovery-runs'] })
+      setTimeout(() => qc.invalidateQueries({ queryKey: ['discovery-runs'] }), 5000)
+      setTimeout(() => qc.invalidateQueries({ queryKey: ['discovery-runs'] }), 15000)
+    },
+    onError: (e) => setToast({ message: apiErrorMessage(e), severity: 'error' }),
+  })
+
+  const ctMonitor = useMutation({
+    mutationFn: () =>
+      api.post('/discovery/ct-monitor', {
+        domains: ctDomains.split(/[,\n]/).map((d) => d.trim()).filter(Boolean),
+      }),
+    onSuccess: () => {
+      setToast({ message: 'CT monitoring scan triggered', severity: 'success' })
       qc.invalidateQueries({ queryKey: ['discovery-runs'] })
       setTimeout(() => qc.invalidateQueries({ queryKey: ['discovery-runs'] }), 5000)
       setTimeout(() => qc.invalidateQueries({ queryKey: ['discovery-runs'] }), 15000)
@@ -198,6 +216,39 @@ export default function DiscoveryPage() {
         </Card>
       )}
 
+      {canCtMonitor && (
+        <Card sx={{ mb: 2 }}>
+          <CardContent>
+            <Typography variant="subtitle2" gutterBottom>
+              CT monitoring — find certificates publicly issued for your domains via Certificate
+              Transparency logs, including ones never deployed anywhere (a mis-issued or rogue
+              certificate from an unexpected CA). Results become Findings you can investigate —
+              see the Findings page.
+            </Typography>
+            <TextField
+              fullWidth
+              size="small"
+              multiline
+              minRows={2}
+              sx={{ mt: 0.5 }}
+              label="Domains to monitor (comma or newline separated)"
+              value={ctDomains}
+              onChange={(e) => setCtDomains(e.target.value)}
+              placeholder={'example.com\nexample.org'}
+            />
+            <Button
+              sx={{ mt: 1.5 }}
+              variant="contained"
+              startIcon={<SecurityIcon />}
+              onClick={() => ctMonitor.mutate()}
+              disabled={ctMonitor.isPending || !ctDomains.trim()}
+            >
+              {ctMonitor.isPending ? 'Scanning…' : 'Run CT scan'}
+            </Button>
+          </CardContent>
+        </Card>
+      )}
+
       {ignored && ignored.length > 0 && (
         <Card sx={{ mb: 2 }}>
           <CardContent>
@@ -267,14 +318,17 @@ export default function DiscoveryPage() {
                 <TableRow key={r.id}>
                   <TableCell>#{r.id}</TableCell>
                   <TableCell>
-                    <Chip size="small" variant="outlined" color={r.scan_type === 'network' ? 'primary' : 'default'}
-                         label={r.scan_type === 'network' ? 'Network' : 'Filesystem'} />
+                    <Chip size="small" variant="outlined"
+                         color={r.scan_type === 'network' ? 'primary' : r.scan_type === 'ct_log' ? 'secondary' : 'default'}
+                         label={r.scan_type === 'network' ? 'Network' : r.scan_type === 'ct_log' ? 'CT Log' : 'Filesystem'} />
                   </TableCell>
                   <TableCell><StatusChip value={r.status} /></TableCell>
                   <TableCell>
                     <Typography variant="caption">
                       {r.scan_type === 'network'
                         ? `${(r.scan_targets ?? []).join(', ')} : ${(r.scan_ports ?? []).join(',')}`
+                        : r.scan_type === 'ct_log'
+                        ? (r.scan_domains ?? []).join(', ')
                         : r.scan_paths.join(', ')}
                     </Typography>
                   </TableCell>

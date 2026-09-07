@@ -133,6 +133,12 @@ class Settings(BaseSettings):
     # (Settings page) since beat can't be given per-run targets the way an
     # API-triggered scan can.
     network_scan_cron: str = "0 3 * * 0"  # 03:00 UTC every Sunday
+    # Daily, not weekly like the network scanner — this only makes outbound
+    # calls to a public read-only CT aggregator (crt.sh), none of the
+    # "looks like reconnaissance" concern that justified the network
+    # scanner's more conservative cadence. No-ops until ct_monitoring.domains
+    # is set (Settings page).
+    ct_monitor_cron: str = "0 4 * * *"  # 04:00 UTC daily
     health_cron: str = "0 */4 * * *"
 
     # ── Data retention (bounded DB growth) ──────────────────────────────────

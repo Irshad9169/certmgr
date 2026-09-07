@@ -307,6 +307,40 @@ without.
 
 ---
 
+## [1.5.0] — 2026-09-07 — Certificate Transparency monitoring
+
+### Added
+- **Certificate Transparency (CT) monitoring** — queries crt.sh (free, public,
+  no API key) for admin-configured domains and surfaces certificates issued
+  for them, including ones never deployed anywhere (a mis-issued/rogue
+  certificate from an unexpected CA). Complements the network scanner: that
+  one finds what's actually *reachable*; this finds what's been *issued*.
+  Detections: new certificate, unknown CA (against a configurable expected-
+  issuer list), sensitive hostname, staging/test hostname — each with a
+  deterministic, explained risk score (0–100, informational/low/medium/high/
+  critical). Lookalike/typosquat detection is deliberately not included: a
+  crt.sh substring search on your own domain can never surface a lookalike
+  like `examp1e.com` in the first place, so it doesn't fit this ingestion
+  method — would need a separate technique entirely.
+- **Findings** — the first lifecycle-bearing security record in CertMgr
+  (compliance reports and health checks are both point-in-time logs with no
+  acknowledge/resolve capability). A CT finding starts `open` and moves
+  through `acknowledged`/`investigating` to `false_positive`/`resolved`; a
+  rescan of an already-open finding refreshes its evidence without
+  reopening work an analyst is already engaged with. New Findings page,
+  plus a "CT Findings" tab on the certificate detail page.
+- Automatic daily CT scans via Celery beat (`CERTMGR_CT_MONITOR_CRON`,
+  default 04:00 UTC — daily, not weekly like the network scanner, since
+  this only calls a public read-only aggregator, none of the "looks like
+  reconnaissance" concern that justified the network scanner's more
+  conservative cadence). Opt-in via `ct_monitoring.domains`, empty by
+  default. Also wired into the single-node `scheduled_jobs` mechanism.
+- Admin-only permission (`discovery:ct_monitor`) for triggering scans;
+  `finding:view`/`finding:manage` for the findings lifecycle (view granted
+  broadly, manage to admin + certificate manager).
+
+---
+
 ## [Unreleased] — Planned
 
 - SSO: LDAP/AD, OpenID Connect, OAuth2, SAML (settings scaffolding exists).

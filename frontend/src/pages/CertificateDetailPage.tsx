@@ -50,6 +50,18 @@ interface NetworkSighting {
   last_seen_at?: string
 }
 
+interface CTFindingRow {
+  id: number
+  domain: string
+  match_type: string
+  detections: { code: string; weight: number; reason: string }[]
+  risk_score: number
+  severity: string
+  status: string
+  first_seen_at?: string
+  last_seen_at?: string
+}
+
 export default function CertificateDetailPage() {
   const { id } = useParams()
   const certId = Number(id)
@@ -81,6 +93,12 @@ export default function CertificateDetailPage() {
     queryFn: () =>
       api.get<NetworkSighting[]>('/discovery/network-sightings', { params: { certificate_id: certId } }).then((r) => r.data),
     enabled: tab === 3,
+  })
+  const ctFindings = useQuery({
+    queryKey: ['cert-ct-findings', certId],
+    queryFn: () =>
+      api.get<Page<CTFindingRow>>('/findings', { params: { certificate_id: certId, page_size: 50 } }).then((r) => r.data),
+    enabled: tab === 4,
   })
   const servers = useQuery({
     queryKey: ['servers-min'],
@@ -239,6 +257,7 @@ export default function CertificateDetailPage() {
           <Tab label="Deployments" />
           <Tab label="Downloads" />
           <Tab label="Seen on network" />
+          <Tab label="CT Findings" />
         </Tabs>
       </Paper>
 
@@ -383,6 +402,47 @@ export default function CertificateDetailPage() {
                   <TableRow>
                     <TableCell colSpan={5} align="center">
                       Not seen via a network scan — see Discovery → Network scan
+                    </TableCell>
+                  </TableRow>
+                )}
+              </TableBody>
+            </Table>
+          </TableContainer>
+        ))}
+
+      {tab === 4 &&
+        (ctFindings.isLoading ? <Loading /> : (
+          <TableContainer component={Paper}>
+            <Table size="small">
+              <TableHead>
+                <TableRow>
+                  <TableCell>Domain</TableCell>
+                  <TableCell>Match</TableCell>
+                  <TableCell>Severity</TableCell>
+                  <TableCell>Risk</TableCell>
+                  <TableCell>Detections</TableCell>
+                  <TableCell>Status</TableCell>
+                  <TableCell>Last seen</TableCell>
+                </TableRow>
+              </TableHead>
+              <TableBody>
+                {(ctFindings.data?.items ?? []).map((f) => (
+                  <TableRow key={f.id}>
+                    <TableCell>{f.domain}</TableCell>
+                    <TableCell>{f.match_type}</TableCell>
+                    <TableCell><StatusChip value={f.severity} /></TableCell>
+                    <TableCell>{f.risk_score}</TableCell>
+                    <TableCell>
+                      <Typography variant="caption">{f.detections.map((d) => d.code).join(', ') || '—'}</Typography>
+                    </TableCell>
+                    <TableCell><StatusChip value={f.status} /></TableCell>
+                    <TableCell>{f.last_seen_at ? new Date(f.last_seen_at).toLocaleString() : '—'}</TableCell>
+                  </TableRow>
+                ))}
+                {(ctFindings.data?.items ?? []).length === 0 && (
+                  <TableRow>
+                    <TableCell colSpan={7} align="center">
+                      Not observed via Certificate Transparency — see Discovery → CT Monitoring
                     </TableCell>
                   </TableRow>
                 )}

@@ -63,11 +63,12 @@ class DiscoveryRun(Base, IntPkMixin):
     skipped_count: Mapped[int] = mapped_column(Integer, default=0)
     log: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_by: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    # "filesystem" (default, existing runs) or "network" — a network scan has
-    # no scan_paths; it has scan_targets (hosts/CIDRs) + scan_ports instead.
+    # "filesystem" (default, existing runs), "network", or "ct_log" — each
+    # scan_type only populates its own target-shape column(s).
     scan_type: Mapped[str] = mapped_column(String(16), default="filesystem", nullable=False)
     scan_targets: Mapped[list | None] = mapped_column(JSON, nullable=True)
     scan_ports: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    scan_domains: Mapped[list | None] = mapped_column(JSON, nullable=True)
 
 
 class NetworkCertificateSighting(Base, IntPkMixin):
@@ -97,6 +98,32 @@ class NetworkCertificateSighting(Base, IntPkMixin):
     first_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     discovery_run_id: Mapped[int | None] = mapped_column(
+        ForeignKey("discovery_runs.id", ondelete="SET NULL"), nullable=True
+    )
+
+
+class CTObservation(Base, IntPkMixin):
+    """A certificate observed via Certificate Transparency log search (crt.sh).
+
+    Unlike NetworkCertificateSighting, this is NOT append-only — a crt.sh
+    entry (crt_sh_id) is an immutable historical record, not a live endpoint
+    that can start serving a different certificate over time, so a rescan
+    just bumps last_seen_at in place on the same row.
+    """
+
+    __tablename__ = "ct_observations"
+    __table_args__ = (
+        Index("ix_ct_observation_cert", "certificate_id"),
+    )
+
+    certificate_id: Mapped[int] = mapped_column(
+        ForeignKey("certificates.id", ondelete="CASCADE"), nullable=False
+    )
+    crt_sh_id: Mapped[int] = mapped_column(Integer, unique=True, nullable=False, index=True)
+    matched_domain: Mapped[str] = mapped_column(String(253), nullable=False)
+    first_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    ct_monitor_run_id: Mapped[int | None] = mapped_column(
         ForeignKey("discovery_runs.id", ondelete="SET NULL"), nullable=True
     )
 

@@ -32,6 +32,7 @@ from app.api.v1 import (
     deployments,
     discovery_router,
     extras,
+    findings,
     health_router,
     hooks,
     jobs,
@@ -179,6 +180,7 @@ def create_app() -> FastAPI:
     app.include_router(settings.router, prefix=prefix)
     app.include_router(jobs.router, prefix=prefix)
     app.include_router(discovery_router, prefix=prefix)
+    app.include_router(findings.router, prefix=prefix)
     app.include_router(health_router, prefix=prefix)
     app.include_router(providers_router, prefix=prefix)
     app.include_router(compliance_router, prefix=prefix)

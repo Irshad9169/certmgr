@@ -15,6 +15,7 @@ from app.models.certificate import (
     certificate_tags,
     server_tags,
 )
+from app.models.finding import CTFinding
 from app.models.job import DiscoveryRun, JobExecution, ScheduledJob
 from app.models.notification import (
     Notification,
@@ -37,6 +38,7 @@ __all__ = [
     "CertificateHealthCheck",
     "CertificateRelationship",
     "ComplianceReport",
+    "CTFinding",
     "Deployment",
     "DeploymentTemplate",
     "DiscoveryRun",

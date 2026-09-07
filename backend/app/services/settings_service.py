@@ -48,6 +48,17 @@ DEFAULT_SETTINGS: dict[str, tuple[str, bool, str]] = {
     "tls_scan.max_targets": ("2048", False, "Max host×port combinations allowed in a single network TLS scan"),
     "tls_scan.scheduled_targets": ("", False,
         "Targets for the automatic weekly network scan (comma-separated hosts/CIDRs) — leave empty to disable"),
+    "ct_monitoring.domains": ("", False,
+        "Domains to monitor via Certificate Transparency logs (comma-separated) — leave empty to disable"),
+    "ct_monitoring.expected_issuers": ("", False,
+        "Expected CA names (comma-separated substrings, e.g. \"Let's Encrypt,DigiCert\") — "
+        "empty means the unknown-CA detection is skipped, not that everything is flagged"),
+    "ct_monitoring.sensitive_keywords": ("admin,vpn,sso,login,auth,portal,mail,owa,gateway,remote,internal,secure",
+        False, "Hostname keywords that flag a CT finding as sensitive (comma-separated)"),
+    "ct_monitoring.staging_keywords": ("dev,test,qa,uat,stage,staging,sandbox,preprod,demo,lab",
+        False, "Hostname keywords that flag a CT finding as staging/test infrastructure (comma-separated)"),
+    "ct_monitoring.max_certs_per_domain": ("200", False,
+        "Max crt.sh entries processed per domain per CT scan (safety cap — some domains have thousands)"),
 }
 
 

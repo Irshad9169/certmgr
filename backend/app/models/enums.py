@@ -178,6 +178,7 @@ class JobType(StrEnum):
     HEALTH = "health"
     REPORTS = "reports"
     NETWORK_SCAN = "network_scan"
+    CT_MONITOR = "ct_monitor"
 
 
 class JobStatus(StrEnum):
@@ -246,3 +247,19 @@ class StorageKind(StrEnum):
 class OIDC_STATUS(StrEnum):
     NONE = "none"
     ENABLED = "enabled"
+
+
+class FindingStatus(StrEnum):
+    OPEN = "open"
+    ACKNOWLEDGED = "acknowledged"
+    INVESTIGATING = "investigating"
+    FALSE_POSITIVE = "false_positive"
+    RESOLVED = "resolved"
+
+
+class FindingSeverity(StrEnum):
+    INFORMATIONAL = "informational"
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"
+    CRITICAL = "critical"

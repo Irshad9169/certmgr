@@ -69,6 +69,29 @@ def trigger_network_scan(db: DbSession, user: CurrentUser, request: Request, bod
     return {"status": "queued"}
 
 
+@discovery_router.post("/ct-monitor")
+def trigger_ct_monitor(db: DbSession, user: CurrentUser, request: Request, body: dict[str, Any]):
+    if not has_permission(user.role_name.value, P_["discovery"]["ct_monitor"]):
+        raise PermissionDeniedError("You are not authorized to run CT monitoring scans")
+    domains = body.get("domains") or []
+    if not domains:
+        raise ValidationAppError("At least one domain is required")
+
+    from app.services.discovery_service import run_ct_monitor
+
+    if settings.celery_task_always_eager:
+        run = run_ct_monitor(db, domains=domains, created_by=user.id)
+        return {"run_id": run.id, "found": run.found_count, "imported": run.imported_count,
+                "skipped": run.skipped_count, "status": run.status}
+    from app.tasks.discovery import run_ct_monitor as run_ct_monitor_task
+
+    run_ct_monitor_task.delay(domains, user.id)
+    record(db, action="discovery.ct_monitor.trigger", user_id=user.id, username=user.username,
+           result=AuditResult.SUCCESS, ip_address=get_client_ip(request),
+           user_agent=get_user_agent(request))
+    return {"status": "queued"}
+
+
 @discovery_router.get("/network-sightings")
 def network_sightings(db: DbSession, user: CurrentUser, certificate_id: int | None = None,
                       limit: int = Query(50, ge=1, le=500)):
@@ -100,6 +123,7 @@ def discovery_runs(db: DbSession, user: CurrentUser, limit: int = Query(20, ge=1
         {
             "id": r.id, "status": r.status, "scan_paths": r.scan_paths or [],
             "scan_type": r.scan_type, "scan_targets": r.scan_targets or [], "scan_ports": r.scan_ports or [],
+            "scan_domains": r.scan_domains or [],
             "found": r.found_count, "imported": r.imported_count, "skipped": r.skipped_count,
             "log": (r.log or "")[-5000:],
             "started_at": r.started_at.isoformat() if r.started_at else None,

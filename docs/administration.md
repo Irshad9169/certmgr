@@ -191,6 +191,39 @@ install run beat, not the single-node scheduler) — if you're running
 `CERTMGR_RUN_SCHEDULER=1` instead, use `POST /api/v1/scheduled-jobs` with
 `job_type: "network_scan"` and `config: {"targets": [...], "ports": [...]}`.
 
+### Certificate Transparency (CT) monitoring
+
+Queries [crt.sh](https://crt.sh) (free, public, no API key) for
+admin-configured domains and turns what it finds into inventory + a
+**Finding** — CertMgr's first lifecycle-bearing security record (open →
+acknowledged/investigating → false_positive/resolved), distinct from the
+point-in-time compliance/health-check logs. This answers a different
+question than the network scanner: not "what's reachable," but "what's been
+*issued* for my domains" — including a certificate nobody deployed anywhere,
+e.g. a mis-issued/rogue certificate from an unexpected CA.
+
+Configure via Settings: `ct_monitoring.domains` (comma-separated, empty by
+default — the scheduled run is a no-op until set), `ct_monitoring
+.expected_issuers` (comma-separated CA-name substrings; the unknown-CA
+detection is skipped, not "flag everything," when this is empty),
+`ct_monitoring.sensitive_keywords`/`ct_monitoring.staging_keywords`
+(hostname keyword lists), `ct_monitoring.max_certs_per_domain` (safety cap
+— some domains have thousands of historical CT entries). Manual trigger:
+Discovery page → CT Monitoring card, or `POST /discovery/ct-monitor`
+(admin-only, `discovery:ct_monitor`). Scheduled: daily via Celery beat
+(`CERTMGR_CT_MONITOR_CRON`, default 04:00 UTC), or `POST
+/api/v1/scheduled-jobs` with `job_type: "ct_monitor"` in single-node mode.
+
+Findings live on their own page (`/findings`) and on a "CT Findings" tab per
+certificate. `finding:view` is granted broadly; `finding:manage` (status/
+assignment changes) is admin + certificate manager.
+
+**Not implemented**: lookalike/typosquat domain detection. crt.sh's `q=`
+search is a substring match — a lookalike like `examp1e.com` can never
+appear in a search for `example.com`, so it genuinely doesn't fit this
+ingestion method. Real lookalike detection needs a different technique
+(generate permutations, query crt.sh for each one) — a separate feature.
+
 ## Backups & restore
 
 - `POST /api/v1/backups/run`, the daily Celery beat task, or the CLI

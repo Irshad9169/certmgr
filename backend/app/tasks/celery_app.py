@@ -75,6 +75,10 @@ celery_app.conf.beat_schedule = {
         "task": "app.tasks.discovery.run_scheduled_network_scan",
         "schedule": _crontab_from_cron_string(settings.network_scan_cron, crontab(day_of_week=0, hour=3, minute=0)),
     },
+    "daily-ct-monitor": {
+        "task": "app.tasks.discovery.run_scheduled_ct_monitor",
+        "schedule": _crontab_from_cron_string(settings.ct_monitor_cron, crontab(hour=4, minute=0)),
+    },
     "hourly-health-scan": {
         "task": "app.tasks.maintenance.health_scan",
         "schedule": _crontab_from_cron_string(settings.health_cron, crontab(hour="*/4", minute=0)),

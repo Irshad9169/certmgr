@@ -19,6 +19,7 @@ import ServersPage from './pages/ServersPage'
 import ServerDetailPage from './pages/ServerDetailPage'
 import DeploymentsPage from './pages/DeploymentsPage'
 import DiscoveryPage from './pages/DiscoveryPage'
+import FindingsPage from './pages/FindingsPage'
 import HooksPage from './pages/HooksPage'
 import NotificationsPage from './pages/NotificationsPage'
 import AuditPage from './pages/AuditPage'
@@ -83,6 +84,7 @@ function GuardedRoutes() {
         <Route path="/servers/:id" element={<ServerDetailPage />} />
         <Route path="/deployments" element={<DeploymentsPage />} />
         <Route path="/discovery" element={<DiscoveryPage />} />
+        <Route path="/findings" element={<FindingsPage />} />
         <Route path="/hooks" element={<HooksPage />} />
         <Route path="/notifications" element={<NotificationsPage />} />
         <Route path="/audit" element={<AuditPage />} />

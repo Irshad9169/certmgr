@@ -55,3 +55,30 @@ def run_scheduled_network_scan(db) -> dict:
 
     run = _run(db, targets=targets)
     return {"run_id": run.id, "found": run.found_count, "imported": run.imported_count}
+
+
+@celery_app.task(name="app.tasks.discovery.run_ct_monitor")
+@db_task
+def run_ct_monitor(db, domains: list[str], created_by: int | None = None) -> dict:
+    from app.services.discovery_service import run_ct_monitor as _run
+
+    run = _run(db, domains=domains, created_by=created_by)
+    return {"run_id": run.id, "found": run.found_count, "imported": run.imported_count}
+
+
+@celery_app.task(name="app.tasks.discovery.run_scheduled_ct_monitor")
+@db_task
+def run_scheduled_ct_monitor(db) -> dict:
+    """Celery beat entry point — same no-op-until-configured pattern as
+    run_scheduled_network_scan()."""
+    from app.services.discovery_service import run_ct_monitor as _run
+    from app.services.settings_service import get_setting
+
+    raw_domains = get_setting(db, "ct_monitoring.domains") or ""
+    domains = [d.strip() for d in raw_domains.split(",") if d.strip()]
+    if not domains:
+        logger.info("Scheduled CT monitor skipped — ct_monitoring.domains is not configured")
+        return {"skipped": True, "reason": "no domains configured"}
+
+    run = _run(db, domains=domains)
+    return {"run_id": run.id, "found": run.found_count, "imported": run.imported_count}

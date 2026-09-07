@@ -20,6 +20,7 @@ _scheduler: BackgroundScheduler | None = None
 _JOB_TYPE_TASK = {
     "discovery": "app.tasks.discovery.run_discovery",
     "network_scan": "app.tasks.discovery.run_network_scan",
+    "ct_monitor": "app.tasks.discovery.run_ct_monitor",
     "renewal": "app.tasks.certificates.renew_due",
     "health": "app.tasks.maintenance.health_scan",
     "compliance": "app.tasks.maintenance.compliance_report",
@@ -44,6 +45,10 @@ def _dispatch(job_type: str, config: dict | None = None) -> None:
             from app.services.discovery_service import run_network_scan
 
             run_network_scan(db, targets=config.get("targets", []), ports=config.get("ports"))
+        elif job_type == "ct_monitor":
+            from app.services.discovery_service import run_ct_monitor
+
+            run_ct_monitor(db, domains=config.get("domains", []))
         elif job_type == "renewal":
             from app.models.enums import JobTrigger
             from app.services.certificate_service import due_certificates, renew_certificate

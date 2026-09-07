@@ -57,6 +57,11 @@ P_ = {
         # IP ranges touches infrastructure outside CertMgr's control and
         # could be mistaken for unauthorized network reconnaissance.
         "network_scan": "discovery:network_scan",
+        # Same admin-only rationale as network_scan: querying crt.sh is
+        # low-risk in itself, but the resulting Findings surface security
+        # information (unexpected CAs, sensitive hostnames) that should be
+        # reviewed before broad access is granted.
+        "ct_monitor": "discovery:ct_monitor",
     },
     "health": {
         "view": "health:view",
@@ -64,6 +69,10 @@ P_ = {
     },
     "ai": {
         "use": "ai:use",
+    },
+    "finding": {
+        "view": "finding:view",
+        "manage": "finding:manage",
     },
 }
 
@@ -73,6 +82,7 @@ _ROLE_PERMISSIONS: dict[RoleName, set[str]] = {
         *P_["cert"].values(), *P_["server"].values(), *P_["hook"].values(),
         *P_["notification"].values(), *P_["audit"].values(), *P_["admin"].values(),
         *P_["discovery"].values(), *P_["health"].values(), *P_["ai"].values(),
+        *P_["finding"].values(),
     },
     RoleName.CERT_MANAGER: {
         P_["cert"]["view"], P_["cert"]["issue"], P_["cert"]["renew"], P_["cert"]["revoke"],
@@ -81,6 +91,7 @@ _ROLE_PERMISSIONS: dict[RoleName, set[str]] = {
         P_["server"]["view"], P_["server"]["deploy"],
         P_["hook"]["view"], P_["notification"]["view"],
         P_["discovery"]["run"], P_["discovery"]["view"], P_["health"]["view"],
+        P_["finding"]["view"], P_["finding"]["manage"],
     },
     RoleName.OPERATOR: {
         P_["cert"]["view"], P_["cert"]["issue"], P_["cert"]["renew"], P_["cert"]["import"],
@@ -88,11 +99,12 @@ _ROLE_PERMISSIONS: dict[RoleName, set[str]] = {
         P_["server"]["view"], P_["server"]["deploy"],
         P_["hook"]["view"], P_["notification"]["view"],
         P_["discovery"]["view"], P_["health"]["view"],
+        P_["finding"]["view"],
     },
     RoleName.READ_ONLY: {
         P_["cert"]["view"], P_["server"]["view"], P_["hook"]["view"],
         P_["notification"]["view"], P_["audit"]["view"], P_["discovery"]["view"],
-        P_["health"]["view"],
+        P_["health"]["view"], P_["finding"]["view"],
     },
 }
 
