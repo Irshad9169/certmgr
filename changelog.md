@@ -255,6 +255,58 @@ pipeline, and a handful of new operator-facing features.
 
 ---
 
+## [1.4.0] — 2026-09-07 — Network scanner hardening + scheduling
+
+Real production testing of the 1.3.0 network scanner on test05 surfaced
+several bugs, all now fixed, plus the scheduling capability it launched
+without.
+
+### Fixed
+- Scan log said "No certificates found." even when certificates were found
+  but unchanged since the last scan (the common rescan case, deliberately
+  silent to avoid log noise) — now distinguishes "found nothing" from
+  "found N, all already known."
+- `revoke_certificate()` had no guard for certificates with no registered
+  provider (e.g. `provider_name="imported"` or `"network-scan"`) — an
+  unhandled `KeyError` from the provider registry crashed with a 500 instead
+  of a clean error. Not unique to network-scan certs; any manually-imported
+  certificate had the same latent risk.
+- `delete_certificate()`'s deletability gate and its `DiscoveryIgnore`-write
+  both checked `cert.imported`, which network-scan certificates never set —
+  they could not be deleted at all despite the function's own docstring
+  saying discovered certificates should be. Now keys off
+  `managed_by_platform`. `run_network_scan()` also now consults
+  `DiscoveryIgnore` before creating a certificate, so a deleted
+  network-found certificate stays deleted instead of reappearing on the
+  next scan.
+- Network-found certificates got a fixed `status="discovered"` that
+  nothing ever revisited — unlike platform-managed certificates, whose
+  status refreshes on every renewal attempt, these never go through
+  issue/renew (no private key, `auto_renew` always `False`), so a
+  certificate discovered today and expired next month showed "discovered"
+  forever. Status is now computed from the actual validity window
+  (active/expiring/expired) both at creation and on every rescan.
+- Audit log's Resource column only ever showed `certificate:77` — the
+  identifying detail (domain, hostname, etc.) was already recorded in the
+  `details` JSON blob but required expanding it to see; now shown inline,
+  picking whichever human-readable field is present since different
+  action types populate different keys. Also fixed the column stretching
+  to fill the page (an HTML table sizes a column to its widest cell across
+  every row, so one long `details` value elsewhere in the list widened it
+  for all rows) with a truncate + tooltip, matching the Certificates page's
+  existing pattern for long text cells.
+
+### Added
+- Automatic weekly network scans via Celery beat
+  (`CERTMGR_NETWORK_SCAN_CRON`, default Sunday 03:00 UTC) — opt-in via the
+  new `tls_scan.scheduled_targets` setting (empty by default; the scheduled
+  run is a no-op until targets are configured, deliberately not scanning
+  anything until an admin has explicitly reviewed and enabled it). Also
+  wired into the single-node `scheduled_jobs` mechanism
+  (`job_type: "network_scan"`) for non-beat deployments.
+
+---
+
 ## [Unreleased] — Planned
 
 - SSO: LDAP/AD, OpenID Connect, OAuth2, SAML (settings scaffolding exists).

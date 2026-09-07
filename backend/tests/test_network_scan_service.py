@@ -15,9 +15,11 @@ from conftest import _generate_self_signed  # noqa: F401
 
 from app.core.timeutils import ensure_aware, utcnow
 from app.models.certificate import Certificate
-from app.models.job import DiscoveryIgnore, NetworkCertificateSighting
+from app.models.job import DiscoveryIgnore, DiscoveryRun, NetworkCertificateSighting
 from app.services.certificate_service import delete_certificate
 from app.services.discovery_service import run_network_scan
+from app.services.settings_service import set_setting
+from app.tasks.discovery import run_scheduled_network_scan
 
 
 class _LocalTLSServer:
@@ -229,3 +231,27 @@ def test_deleted_network_scan_certificate_is_not_recreated_by_next_scan(db, tls_
     assert run2.imported_count == 0
     assert db.query(Certificate).filter(Certificate.fingerprint_sha256 == fingerprint).count() == 0
     assert "SKIP ignored" in run2.log
+
+
+def test_scheduled_scan_skips_when_no_targets_configured(db):
+    # Default is "" (DEFAULT_SETTINGS) — nobody has opted in yet. Calling the
+    # task directly (not .delay()) runs it in-process, same as any Celery
+    # task object's normal __call__ — db_task's own session_scope() commits
+    # are visible via the test's `db` fixture (same pattern already proven
+    # in test_tasks.py::test_session_scope_commits_on_success).
+    result = run_scheduled_network_scan()
+    assert result == {"skipped": True, "reason": "no targets configured"}
+    assert db.query(DiscoveryRun).filter(DiscoveryRun.scan_type == "network").count() == 0
+
+
+def test_scheduled_scan_runs_against_configured_targets(db, tls_server):
+    set_setting(db, "tls_scan.scheduled_targets", "127.0.0.1")
+    set_setting(db, "tls_scan.default_ports", str(tls_server.port))
+
+    result = run_scheduled_network_scan()
+
+    assert "run_id" in result
+    assert result["found"] == 1
+    assert result["imported"] == 1
+    cert = db.query(Certificate).filter(Certificate.provider_name == "network-scan").one()
+    assert cert.domain == "scan-target.example.com"

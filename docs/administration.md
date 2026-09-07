@@ -177,6 +177,20 @@ Beat schedule is fixed (see `app/tasks/celery_app.py`) and additionally manageab
 via `GET/POST/PATCH /api/v1/scheduled-jobs` for user-defined jobs (interval or cron)
 when the API runs with `CERTMGR_RUN_SCHEDULER=1` (single-node in-process mode).
 
+### Automatic network TLS scans
+
+Unlike filesystem discovery (scheduled daily out of the box), the network
+scanner is manual-trigger-only until you opt in — set
+`tls_scan.scheduled_targets` (Settings page, comma-separated hosts/CIDRs) to
+enable a weekly Celery beat run (`CERTMGR_NETWORK_SCAN_CRON`, default
+`0 3 * * 0` — Sunday 03:00 UTC); leave it empty and the scheduled run is a
+no-op (it doesn't even create a `DiscoveryRun` row). Ports/concurrency/
+timeout come from the same `tls_scan.*` settings the manual scan uses.
+This is a Celery-beat-only path today (test05 and every bare-metal OL8
+install run beat, not the single-node scheduler) — if you're running
+`CERTMGR_RUN_SCHEDULER=1` instead, use `POST /api/v1/scheduled-jobs` with
+`job_type: "network_scan"` and `config: {"targets": [...], "ports": [...]}`.
+
 ## Backups & restore
 
 - `POST /api/v1/backups/run`, the daily Celery beat task, or the CLI

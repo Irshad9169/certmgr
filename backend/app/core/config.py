@@ -127,6 +127,12 @@ class Settings(BaseSettings):
     renewal_retry_max: int = 3
     renewal_cron: str = "0 3 * * *"  # 03:00 UTC daily
     discovery_cron: str = "30 2 * * *"
+    # Weekly, not daily like filesystem discovery — a network scan touches
+    # infrastructure outside CertMgr's control, so a more conservative
+    # default cadence. No-ops until tls_scan.scheduled_targets is set
+    # (Settings page) since beat can't be given per-run targets the way an
+    # API-triggered scan can.
+    network_scan_cron: str = "0 3 * * 0"  # 03:00 UTC every Sunday
     health_cron: str = "0 */4 * * *"
 
     # ── Data retention (bounded DB growth) ──────────────────────────────────

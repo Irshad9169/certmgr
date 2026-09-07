@@ -46,6 +46,8 @@ DEFAULT_SETTINGS: dict[str, tuple[str, bool, str]] = {
     "tls_scan.concurrency": ("20", False, "Concurrent connections during a network TLS scan"),
     "tls_scan.timeout_seconds": ("3", False, "Per-connection timeout (seconds) during a network TLS scan"),
     "tls_scan.max_targets": ("2048", False, "Max host×port combinations allowed in a single network TLS scan"),
+    "tls_scan.scheduled_targets": ("", False,
+        "Targets for the automatic weekly network scan (comma-separated hosts/CIDRs) — leave empty to disable"),
 }
 
 
