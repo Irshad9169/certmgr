@@ -375,6 +375,8 @@ def run_ct_monitor(
                     expected_issuers=resolved_expected_issuers,
                     sensitive_keywords=resolved_sensitive,
                     staging_keywords=resolved_staging,
+                    serial_number=entry.get("serial_number"),
+                    issuer_name=entry.get("issuer_name"),
                 )
             except Exception as exc:  # noqa: BLE001
                 run.skipped_count = (run.skipped_count or 0) + 1
@@ -406,6 +408,7 @@ def _record_ct_observation(
     db: Session, domain: str, crt_sh_id: int, run: DiscoveryRun, logs: list[str],
     *, ignored_fingerprints: set[str], known_crt_sh_ids: set[int], monitored_domains: list[str],
     expected_issuers: list[str], sensitive_keywords: list[str], staging_keywords: list[str],
+    serial_number: str | None = None, issuer_name: str | None = None,
 ) -> None:
     from app.core.config import settings
     from app.services import ct_monitor
@@ -419,57 +422,82 @@ def _record_ct_observation(
             obs.ct_monitor_run_id = run.id
         return
 
-    pem = ct_monitor.fetch_crtsh_certificate_pem(crt_sh_id)
-    if pem is None:
-        run.skipped_count = (run.skipped_count or 0) + 1
-        logs.append(f"SKIP crt.sh id={crt_sh_id}: could not fetch certificate")
-        return
-    cert_obj, meta = parse_certificate(pem)
-
-    if meta.fingerprint_sha256 in ignored_fingerprints:
-        logs.append(f"SKIP ignored cert (crt.sh id={crt_sh_id}, {meta.fingerprint_sha256})")
-        return
-
     match_type = ct_monitor.classify_domain_match(domain, monitored_domains)
-    matched_name = meta.sans[0] if meta.sans else domain
 
-    certificate = db.query(Certificate).filter(
-        Certificate.fingerprint_sha256 == meta.fingerprint_sha256
-    ).first()
-    is_new = certificate is None
+    # crt.sh commonly logs the exact same certificate to several CT logs,
+    # each getting its own crt_sh_id (confirmed live: a single-domain query
+    # returned duplicate serial numbers under different ids). crt.sh's cheap
+    # JSON row already carries serial_number/issuer_name, so a known
+    # certificate can be matched here without the expensive raw-PEM-fetch
+    # round-trip. A mismatch or absent serial just falls through to the
+    # normal path below — this is a pure optimization, never a source of
+    # incorrect matches.
+    certificate = None
+    if serial_number and issuer_name:
+        try:
+            serial_hex = f"{int(serial_number, 16):x}"
+        except (TypeError, ValueError):
+            serial_hex = None
+        if serial_hex:
+            certificate = db.query(Certificate).filter(
+                Certificate.serial_number == serial_hex,
+                Certificate.issuer == issuer_name,
+            ).first()
 
-    if is_new:
-        store = get_file_store()
-        store_dir = store.cert_dir(meta.fingerprint_sha256)
-        primary = meta.sans[0] if meta.sans else domain
-        (store_dir / "cert.pem").write_bytes(cert_obj.public_bytes(serialization.Encoding.PEM))
+    if certificate is not None:
+        is_new = False
+        matched_name = certificate.sans[0] if certificate.sans else domain
+    else:
+        pem = ct_monitor.fetch_crtsh_certificate_pem(crt_sh_id)
+        if pem is None:
+            run.skipped_count = (run.skipped_count or 0) + 1
+            logs.append(f"SKIP crt.sh id={crt_sh_id}: could not fetch certificate")
+            return
+        cert_obj, meta = parse_certificate(pem)
 
-        certificate = Certificate(
-            domain=primary,
-            sans=meta.sans or [primary],
-            is_wildcard=meta.is_wildcard,
-            cert_type=_cert_type_for(meta.sans or [primary]),
-            subject=meta.subject, issuer=meta.issuer, serial_number=meta.serial_number,
-            fingerprint_sha256=meta.fingerprint_sha256,
-            public_key_algorithm=meta.public_key_algorithm,
-            key_type=meta.key_type, key_size=meta.key_size,
-            signature_algorithm=meta.signature_algorithm,
-            valid_from=meta.valid_from, valid_until=meta.valid_until,
-            status=_validity_status(meta.valid_until, threshold_days=settings.renewal_threshold_days),
-            environment=settings.default_environment,
-            provider_name="ct-log",
-            imported=False,
-            auto_renew=False,
-            renewal_status=RenewalStatus.NONE.value,
-            cert_path=str(store_dir / "cert.pem"),
-            managed_by_platform=False,
-        )
-        db.add(certificate)
-        db.flush()
-        for idx, d in enumerate(certificate.sans):
-            db.add(CertificateDomain(certificate_id=certificate.id, domain=d, is_primary=(idx == 0)))
-        run.imported_count = (run.imported_count or 0) + 1
-        logs.append(f"FOUND new cert via CT for {domain} ({certificate.fingerprint_sha256})")
+        if meta.fingerprint_sha256 in ignored_fingerprints:
+            logs.append(f"SKIP ignored cert (crt.sh id={crt_sh_id}, {meta.fingerprint_sha256})")
+            return
+
+        matched_name = meta.sans[0] if meta.sans else domain
+
+        certificate = db.query(Certificate).filter(
+            Certificate.fingerprint_sha256 == meta.fingerprint_sha256
+        ).first()
+        is_new = certificate is None
+
+        if is_new:
+            store = get_file_store()
+            store_dir = store.cert_dir(meta.fingerprint_sha256)
+            primary = meta.sans[0] if meta.sans else domain
+            (store_dir / "cert.pem").write_bytes(cert_obj.public_bytes(serialization.Encoding.PEM))
+
+            certificate = Certificate(
+                domain=primary,
+                sans=meta.sans or [primary],
+                is_wildcard=meta.is_wildcard,
+                cert_type=_cert_type_for(meta.sans or [primary]),
+                subject=meta.subject, issuer=meta.issuer, serial_number=meta.serial_number,
+                fingerprint_sha256=meta.fingerprint_sha256,
+                public_key_algorithm=meta.public_key_algorithm,
+                key_type=meta.key_type, key_size=meta.key_size,
+                signature_algorithm=meta.signature_algorithm,
+                valid_from=meta.valid_from, valid_until=meta.valid_until,
+                status=_validity_status(meta.valid_until, threshold_days=settings.renewal_threshold_days),
+                environment=settings.default_environment,
+                provider_name="ct-log",
+                imported=False,
+                auto_renew=False,
+                renewal_status=RenewalStatus.NONE.value,
+                cert_path=str(store_dir / "cert.pem"),
+                managed_by_platform=False,
+            )
+            db.add(certificate)
+            db.flush()
+            for idx, d in enumerate(certificate.sans):
+                db.add(CertificateDomain(certificate_id=certificate.id, domain=d, is_primary=(idx == 0)))
+            run.imported_count = (run.imported_count or 0) + 1
+            logs.append(f"FOUND new cert via CT for {domain} ({certificate.fingerprint_sha256})")
 
     now = utcnow()
     db.add(CTObservation(
@@ -481,7 +509,7 @@ def _record_ct_observation(
     ))
 
     detections = ct_monitor.run_detections(
-        meta, matched_name, is_new=is_new,
+        certificate.issuer, matched_name, is_new=is_new,
         expected_issuers=expected_issuers, sensitive_keywords=sensitive_keywords,
         staging_keywords=staging_keywords,
     )

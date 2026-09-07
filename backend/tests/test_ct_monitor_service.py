@@ -125,6 +125,41 @@ def test_deleted_ct_certificate_is_not_recreated_by_next_scan(db, monkeypatch):
     assert "SKIP ignored" in run2.log
 
 
+def test_duplicate_crt_sh_ids_for_the_same_certificate_reuse_the_row_without_refetch(db, monkeypatch):
+    """crt.sh commonly logs one certificate to several CT logs, each getting
+    its own id (confirmed live against crt.sh: a single-domain query returned
+    paired identical serial numbers under different ids). The second id for
+    the same certificate must be matched via the cheap serial_number/issuer
+    fields in its JSON row, not a second raw-PEM-fetch round-trip."""
+    from app.services.x509_utils import parse_certificate
+
+    _, cert_pem, _ = _generate_self_signed(["example.com"])
+    _, meta = parse_certificate(cert_pem)
+    fetch_pem_calls: list[int] = []
+
+    def _fetch_pem(crt_sh_id: int, *, timeout: float = 15.0):
+        fetch_pem_calls.append(crt_sh_id)
+        return cert_pem
+
+    entries = [
+        {"id": 5005, "name_value": "example.com",
+         "serial_number": meta.serial_number, "issuer_name": meta.issuer},
+        {"id": 5006, "name_value": "example.com",
+         "serial_number": meta.serial_number, "issuer_name": meta.issuer},
+    ]
+    monkeypatch.setattr(ct_monitor, "fetch_crtsh_entries",
+                        lambda domain, *, limit, timeout=15.0: entries)
+    monkeypatch.setattr(ct_monitor, "fetch_crtsh_certificate_pem", _fetch_pem)
+
+    run = run_ct_monitor(db, domains=["example.com"])
+
+    assert len(fetch_pem_calls) == 1
+    assert db.query(Certificate).filter(Certificate.provider_name == "ct-log").count() == 1
+    assert db.query(CTObservation).filter(CTObservation.crt_sh_id.in_([5005, 5006])).count() == 2
+    assert run.imported_count == 1
+    assert run.found_count == 2
+
+
 def test_crtsh_unavailable_does_not_fail_the_scan(db, monkeypatch):
     monkeypatch.setattr(ct_monitor, "fetch_crtsh_entries", lambda domain, *, limit, timeout=15.0: [])
 

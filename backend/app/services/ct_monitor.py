@@ -23,7 +23,6 @@ import httpx
 
 from app.core.logging import get_logger
 from app.models.enums import FindingSeverity
-from app.services.x509_utils import CertificateMetadata
 
 logger = get_logger(__name__)
 
@@ -77,7 +76,7 @@ def classify_domain_match(name: str, monitored_domains: list[str]) -> str:
 
 
 def run_detections(
-    meta: CertificateMetadata,
+    issuer: str | None,
     matched_name: str,
     *,
     is_new: bool,
@@ -97,11 +96,11 @@ def run_detections(
 
     expected = [e.strip() for e in expected_issuers if e.strip()]
     if expected:
-        issuer_lower = (meta.issuer or "").lower()
+        issuer_lower = (issuer or "").lower()
         if not any(exp.lower() in issuer_lower for exp in expected):
             detections.append({
                 "code": "UNKNOWN_CA", "weight": 25,
-                "reason": f"Issuer not in expected list: {meta.issuer or 'unknown'}",
+                "reason": f"Issuer not in expected list: {issuer or 'unknown'}",
             })
 
     name_lower = (matched_name or "").lower()

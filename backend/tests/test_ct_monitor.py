@@ -8,7 +8,6 @@ from app.services.ct_monitor import (
     risk_severity,
     run_detections,
 )
-from app.services.x509_utils import CertificateMetadata
 
 
 def test_classify_exact_match():
@@ -44,15 +43,12 @@ def test_classify_case_and_trailing_dot_insensitive():
     assert classify_domain_match("VPN.EXAMPLE.COM.", ["example.com"]) == "subdomain"
 
 
-def _meta(**overrides) -> CertificateMetadata:
-    base = {"issuer": "CN=R3, O=Let's Encrypt", "sans": ["example.com"]}
-    base.update(overrides)
-    return CertificateMetadata(**base)
+_LETS_ENCRYPT = "CN=R3, O=Let's Encrypt"
 
 
 def test_new_certificate_detection_fires():
     detections = run_detections(
-        _meta(), "example.com", is_new=True,
+        _LETS_ENCRYPT, "example.com", is_new=True,
         expected_issuers=[], sensitive_keywords=[], staging_keywords=[],
     )
     codes = [d["code"] for d in detections]
@@ -61,7 +57,7 @@ def test_new_certificate_detection_fires():
 
 def test_rescan_of_known_cert_does_not_refire_new_certificate():
     detections = run_detections(
-        _meta(), "example.com", is_new=False,
+        _LETS_ENCRYPT, "example.com", is_new=False,
         expected_issuers=[], sensitive_keywords=[], staging_keywords=[],
     )
     codes = [d["code"] for d in detections]
@@ -72,7 +68,7 @@ def test_unknown_ca_detection_only_fires_when_expected_issuers_configured():
     # Empty expected_issuers means "nothing configured to compare against",
     # not "flag everything" — must not fire.
     detections = run_detections(
-        _meta(issuer="CN=Some Random CA"), "example.com", is_new=False,
+        "CN=Some Random CA", "example.com", is_new=False,
         expected_issuers=[], sensitive_keywords=[], staging_keywords=[],
     )
     assert "UNKNOWN_CA" not in [d["code"] for d in detections]
@@ -80,7 +76,7 @@ def test_unknown_ca_detection_only_fires_when_expected_issuers_configured():
 
 def test_unknown_ca_detection_fires_for_unexpected_issuer():
     detections = run_detections(
-        _meta(issuer="CN=Some Random CA"), "example.com", is_new=False,
+        "CN=Some Random CA", "example.com", is_new=False,
         expected_issuers=["Let's Encrypt", "DigiCert"], sensitive_keywords=[], staging_keywords=[],
     )
     assert "UNKNOWN_CA" in [d["code"] for d in detections]
@@ -88,7 +84,7 @@ def test_unknown_ca_detection_fires_for_unexpected_issuer():
 
 def test_unknown_ca_detection_does_not_fire_for_expected_issuer():
     detections = run_detections(
-        _meta(issuer="CN=R3, O=Let's Encrypt"), "example.com", is_new=False,
+        _LETS_ENCRYPT, "example.com", is_new=False,
         expected_issuers=["Let's Encrypt"], sensitive_keywords=[], staging_keywords=[],
     )
     assert "UNKNOWN_CA" not in [d["code"] for d in detections]
@@ -96,7 +92,7 @@ def test_unknown_ca_detection_does_not_fire_for_expected_issuer():
 
 def test_sensitive_hostname_detection():
     detections = run_detections(
-        _meta(), "vpn.example.com", is_new=False,
+        _LETS_ENCRYPT, "vpn.example.com", is_new=False,
         expected_issuers=[], sensitive_keywords=["vpn", "admin"], staging_keywords=[],
     )
     assert "SENSITIVE_HOSTNAME" in [d["code"] for d in detections]
@@ -104,7 +100,7 @@ def test_sensitive_hostname_detection():
 
 def test_staging_hostname_detection():
     detections = run_detections(
-        _meta(), "staging-api.example.com", is_new=False,
+        _LETS_ENCRYPT, "staging-api.example.com", is_new=False,
         expected_issuers=[], sensitive_keywords=[], staging_keywords=["staging", "dev"],
     )
     assert "STAGING_HOSTNAME" in [d["code"] for d in detections]
@@ -112,7 +108,7 @@ def test_staging_hostname_detection():
 
 def test_no_detections_for_benign_known_cert():
     detections = run_detections(
-        _meta(issuer="CN=R3, O=Let's Encrypt"), "api.example.com", is_new=False,
+        _LETS_ENCRYPT, "api.example.com", is_new=False,
         expected_issuers=["Let's Encrypt"], sensitive_keywords=["vpn"], staging_keywords=["staging"],
     )
     assert detections == []
