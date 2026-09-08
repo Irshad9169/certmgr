@@ -30,19 +30,24 @@ _CRTSH_BASE = "https://crt.sh/"
 _DEFAULT_TIMEOUT = 15.0
 
 
-def fetch_crtsh_entries(domain: str, *, limit: int, timeout: float = _DEFAULT_TIMEOUT) -> list[dict]:
-    """Query crt.sh for a domain. Returns [] on any failure — crt.sh is a
-    community service with no contracted SLA; a slow/down crt.sh must not
-    fail the whole scan, just skip that domain for this run."""
+def fetch_crtsh_entries(domain: str, *, limit: int, timeout: float = _DEFAULT_TIMEOUT) -> list[dict] | None:
+    """Query crt.sh for a domain. Returns None if the query failed outright
+    — crt.sh is a community service with no contracted SLA (confirmed live:
+    it returned two different non-JSON error pages, a 502 then a 404, for
+    the exact same query moments apart) — so callers can tell "crt.sh is
+    down" apart from "crt.sh confirmed zero matches" rather than silently
+    treating both the same way. Returns [] only for a genuine empty result
+    (a valid JSON list with nothing in it)."""
     try:
         resp = httpx.get(_CRTSH_BASE, params={"q": domain, "output": "json"}, timeout=timeout)
         resp.raise_for_status()
         data = resp.json()
     except (httpx.HTTPError, ValueError) as exc:
         logger.warning("crt.sh query failed for %s: %s", domain, exc)
-        return []
+        return None
     if not isinstance(data, list):
-        return []
+        logger.warning("crt.sh returned an unexpected response shape for %s", domain)
+        return None
     return data[:limit]
 
 

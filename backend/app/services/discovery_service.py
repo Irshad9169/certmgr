@@ -360,6 +360,10 @@ def run_ct_monitor(
 
     for domain in domains:
         entries = ct_monitor.fetch_crtsh_entries(domain, limit=max_certs)
+        if entries is None:
+            run.skipped_count = (run.skipped_count or 0) + 1
+            logs.append(f"SKIP {domain}: crt.sh query failed (see server logs for details)")
+            continue
         for entry in entries:
             try:
                 crt_sh_id = int(entry.get("id"))

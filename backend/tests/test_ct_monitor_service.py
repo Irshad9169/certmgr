@@ -161,8 +161,23 @@ def test_duplicate_crt_sh_ids_for_the_same_certificate_reuse_the_row_without_ref
 
 
 def test_crtsh_unavailable_does_not_fail_the_scan(db, monkeypatch):
+    """None (not []) signals a failed query — crt.sh returned a non-JSON
+    error page for both domains in this exact scenario during live testing,
+    which must not be reported as a clean zero-result scan."""
+    monkeypatch.setattr(ct_monitor, "fetch_crtsh_entries", lambda domain, *, limit, timeout=15.0: None)
+
+    run = run_ct_monitor(db, domains=["example.com"])
+    assert run.status == "completed"
+    assert run.found_count == 0
+    assert run.skipped_count == 1
+    assert "crt.sh query failed" in run.log
+
+
+def test_crtsh_genuine_empty_result_is_reported_as_no_certificates(db, monkeypatch):
     monkeypatch.setattr(ct_monitor, "fetch_crtsh_entries", lambda domain, *, limit, timeout=15.0: [])
 
     run = run_ct_monitor(db, domains=["example.com"])
     assert run.status == "completed"
     assert run.found_count == 0
+    assert run.skipped_count in (0, None)
+    assert run.log == "No certificates found."
