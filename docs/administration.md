@@ -224,6 +224,63 @@ appear in a search for `example.com`, so it genuinely doesn't fit this
 ingestion method. Real lookalike detection needs a different technique
 (generate permutations, query crt.sh for each one) — a separate feature.
 
+### Wildcard certificate usage discovery
+
+Answers a different question from both the network scanner and CT
+monitoring: given a specific **wildcard** certificate already in CertMgr
+(e.g. `*.example.com`), which real endpoints are *actually presenting that
+exact certificate* right now? This distinction matters —
+
+```
+Certificate covers hostname   ≠   Endpoint is using certificate
+```
+
+`api.example.com` falling under `*.example.com`'s coverage is only ever a
+*candidate* signal. The only authoritative result comes from a live TLS/SNI
+handshake against the candidate, comparing the presented certificate's
+SHA-256 fingerprint against the selected certificate's fingerprint — an
+exact match is `confirmed`, anything else served at that endpoint is
+`different_certificate`. Certificate verification is deliberately disabled
+for the probe itself (it's asking "what did you present", not "is it
+trusted") — this has no effect on any other certificate validation
+elsewhere in CertMgr.
+
+Candidate hostnames come from two sources (a per-scan checkbox each):
+**Existing CertMgr inventory** (managed servers' hostnames, plus any
+certificate's tracked domains, under the same wildcard suffix) and
+**Manual hostnames** (one per line, optionally `host:port`). There is no
+DNS-based *candidate enumeration* source — DNS *resolution* of each
+candidate is always performed regardless of source, but the codebase has no
+DNS integration for discovering hostnames it doesn't already know about.
+
+Every result is one of:
+
+| Status | Meaning |
+|---|---|
+| `confirmed` | Presented fingerprint == selected certificate's fingerprint |
+| `different_certificate` | Endpoint reached, but presented a different certificate |
+| `unreachable` | DNS resolved, but the TCP connection failed |
+| `dns_failed` | Hostname could not be resolved |
+| `tls_failed` | TCP connected, but the TLS handshake failed |
+| `timeout` | DNS/connect/TLS exceeded the configured timeout |
+
+Configure via Settings: `cert_usage_scan.ports` (default `443,8443,9443`),
+`cert_usage_scan.timeout_seconds` (default `5`),
+`cert_usage_scan.max_concurrency` (default `25`, bounded — this never scans
+arbitrary IP ranges, only known/supplied hostnames). Trigger from a
+certificate's **Usage Discovery** tab (wildcard certificates only —
+non-wildcard certificates show an explanatory message instead), gated on
+`certificate:usage_scan` (admin + certificate manager, the same tier as
+renew/revoke — lower than network_scan/ct_monitor's admin-only bar, since
+this only probes known/supplied hostnames, never arbitrary ranges). Runs
+asynchronously via the existing Celery worker; the scan row is created
+before dispatch so the UI can poll live progress
+(`GET /api/v1/certificate-usage/scans/{id}`) even before a worker has picked
+the task up. Results are upserted per (certificate, hostname, ip, port):
+`first_seen_at` is preserved across rescans, `last_seen_at`/
+`last_checked_at` always advance — this tracks "what's presented right
+now," not a rotation history like the network scanner's sightings.
+
 ## Backups & restore
 
 - `POST /api/v1/backups/run`, the daily Celery beat task, or the CLI

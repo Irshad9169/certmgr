@@ -82,3 +82,20 @@ def run_scheduled_ct_monitor(db) -> dict:
 
     run = _run(db, domains=domains)
     return {"run_id": run.id, "found": run.found_count, "imported": run.imported_count}
+
+
+@celery_app.task(name="app.tasks.discovery.run_certificate_usage_scan")
+@db_task
+def run_certificate_usage_scan(
+    db, certificate_id: int,
+    sources: list[str] | None = None, hostnames: list[str] | None = None,
+    ports: list[int] | None = None, timeout: float | None = None,
+    concurrency: int | None = None, created_by: int | None = None,
+    scan_id: int | None = None,
+) -> dict:
+    from app.services.certificate_usage_service import start_scan
+
+    scan = start_scan(db, certificate_id, sources=sources, hostnames=hostnames, ports=ports,
+                      timeout=timeout, concurrency=concurrency, created_by=created_by, scan_id=scan_id)
+    return {"scan_id": scan.id, "status": scan.status, "confirmed": scan.confirmed_count,
+            "different_certificate": scan.different_certificate_count}

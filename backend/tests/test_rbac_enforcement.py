@@ -138,6 +138,111 @@ def test_operator_cannot_manage_findings(client, role_headers_factory):
     assert resp.status_code == 403
 
 
+def test_read_only_cannot_trigger_usage_scan(client, role_headers_factory):
+    headers = role_headers_factory("ro_usage", "read_only")
+    resp = client.post("/api/v1/certificates/999999/usage/scan", headers=headers, json={})
+    assert resp.status_code == 403
+
+
+def test_operator_cannot_trigger_usage_scan(client, role_headers_factory):
+    """OPERATOR has certificate:renew but not certificate:usage_scan (same
+    renew/revoke-adjacent tier as revoke, not the broader operator set)."""
+    headers = role_headers_factory("op_usage", "operator")
+    resp = client.post("/api/v1/certificates/999999/usage/scan", headers=headers, json={})
+    assert resp.status_code == 403
+
+
+def test_cert_manager_can_trigger_usage_scan(client, role_headers_factory):
+    from conftest import SessionLocal
+
+    from app.models.certificate import Certificate
+    from app.models.enums import CertificateType, ValidationMethod
+
+    db = SessionLocal()
+    try:
+        cert = Certificate(domain="*.rbac-usage.example.com", cert_name="rbac-usage",
+                           sans=["*.rbac-usage.example.com"], cert_type=CertificateType.WILDCARD.value,
+                           validation_method=ValidationMethod.HTTP_01.value, is_wildcard=True)
+        db.add(cert)
+        db.commit()
+        cert_id = cert.id
+    finally:
+        db.close()
+
+    headers = role_headers_factory("cm_usage", "certificate_manager")
+    resp = client.post(f"/api/v1/certificates/{cert_id}/usage/scan", headers=headers,
+                       json={"sources": ["manual"], "hostnames": []})
+    assert resp.status_code == 200, resp.text
+
+
+def test_usage_scan_rejects_non_wildcard_certificate(client, admin_headers):
+    from conftest import SessionLocal
+
+    from app.models.certificate import Certificate
+    from app.models.enums import CertificateType, ValidationMethod
+
+    db = SessionLocal()
+    try:
+        cert = Certificate(domain="single.rbac-usage.example.com", cert_name="single-rbac-usage",
+                           sans=["single.rbac-usage.example.com"], cert_type=CertificateType.SINGLE.value,
+                           validation_method=ValidationMethod.HTTP_01.value, is_wildcard=False)
+        db.add(cert)
+        db.commit()
+        cert_id = cert.id
+    finally:
+        db.close()
+
+    resp = client.post(f"/api/v1/certificates/{cert_id}/usage/scan", headers=admin_headers, json={})
+    assert resp.status_code == 422
+
+
+def test_read_only_can_view_usage_results(client, role_headers_factory):
+    headers = role_headers_factory("ro_usage_view", "read_only")
+    resp = client.get("/api/v1/certificates/999999/usage", headers=headers)
+    assert resp.status_code == 200, resp.text
+
+
+def test_async_usage_scan_trigger_returns_a_pollable_scan_id(client, admin_headers, monkeypatch):
+    """In real (non-eager) Celery deployments, the scan row must be created
+    and its id returned BEFORE a worker picks up the task, so the frontend
+    has something to poll immediately (rather than a bare {"status":
+    "queued"}, which the other discovery scans return with no id)."""
+    from app.core.config import settings
+    from app.models.certificate import Certificate
+    from app.models.certificate_usage import CertificateUsageScan
+    from app.models.enums import CertificateType, ValidationMethod
+    from conftest import SessionLocal
+
+    monkeypatch.setattr(settings, "celery_task_always_eager", False)
+    monkeypatch.setattr("app.tasks.discovery.run_certificate_usage_scan.delay", lambda *a, **k: None)
+
+    db = SessionLocal()
+    try:
+        cert = Certificate(domain="*.async-usage.example.com", cert_name="async-usage",
+                           sans=["*.async-usage.example.com"], cert_type=CertificateType.WILDCARD.value,
+                           validation_method=ValidationMethod.HTTP_01.value, is_wildcard=True)
+        db.add(cert)
+        db.commit()
+        cert_id = cert.id
+    finally:
+        db.close()
+
+    resp = client.post(f"/api/v1/certificates/{cert_id}/usage/scan", headers=admin_headers,
+                       json={"sources": ["manual"], "hostnames": ["api.async-usage.example.com"]})
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["status"] == "queued"
+    assert "scan_id" in body
+
+    db = SessionLocal()
+    try:
+        scan = db.get(CertificateUsageScan, body["scan_id"])
+        assert scan is not None
+        assert scan.certificate_id == cert_id
+    finally:
+        db.close()
+
+
 def test_operator_cannot_run_health_scan(client, role_headers_factory):
     """OPERATOR has health:view but not health:run."""
     headers = role_headers_factory("op_health", "operator")

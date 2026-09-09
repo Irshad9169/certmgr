@@ -59,6 +59,12 @@ DEFAULT_SETTINGS: dict[str, tuple[str, bool, str]] = {
         False, "Hostname keywords that flag a CT finding as staging/test infrastructure (comma-separated)"),
     "ct_monitoring.max_certs_per_domain": ("200", False,
         "Max crt.sh entries processed per domain per CT scan (safety cap — some domains have thousands)"),
+    "cert_usage_scan.ports": ("443,8443,9443", False,
+        "Default ports probed during wildcard certificate usage discovery (comma-separated)"),
+    "cert_usage_scan.timeout_seconds": ("5", False,
+        "Per-connection DNS/TCP/TLS timeout (seconds) during usage discovery"),
+    "cert_usage_scan.max_concurrency": ("25", False,
+        "Concurrent TLS probes during a single usage discovery scan"),
 }
 
 

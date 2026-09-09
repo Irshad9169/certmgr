@@ -22,6 +22,12 @@ P_ = {
         "edit": "certificate:edit",
         "delete": "certificate:delete",
         "bulk": "certificate:bulk",
+        # Wildcard usage discovery makes real outbound TLS connections to
+        # candidate hostnames — same renew/revoke tier (admin + cert_manager),
+        # not the admin-only tier network_scan/ct_monitor use, since it's
+        # bounded to known inventory/manual hostnames, not arbitrary ranges.
+        # Viewing results reuses "view" — it's just certificate detail data.
+        "usage_scan": "certificate:usage_scan",
     },
     "server": {
         "view": "server:view",
@@ -87,7 +93,7 @@ _ROLE_PERMISSIONS: dict[RoleName, set[str]] = {
     RoleName.CERT_MANAGER: {
         P_["cert"]["view"], P_["cert"]["issue"], P_["cert"]["renew"], P_["cert"]["revoke"],
         P_["cert"]["import"], P_["cert"]["export"], P_["cert"]["download_key"],
-        P_["cert"]["deploy"], P_["cert"]["edit"], P_["cert"]["bulk"],
+        P_["cert"]["deploy"], P_["cert"]["edit"], P_["cert"]["bulk"], P_["cert"]["usage_scan"],
         P_["server"]["view"], P_["server"]["deploy"],
         P_["hook"]["view"], P_["notification"]["view"],
         P_["discovery"]["run"], P_["discovery"]["view"], P_["health"]["view"],

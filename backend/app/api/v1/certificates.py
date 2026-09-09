@@ -372,6 +372,95 @@ def certificate_executions(certificate_id: int, db: DbSession, user: CurrentUser
     }
 
 
+# ── Wildcard certificate usage discovery ────────────────────────────────────
+def _serialize_usage_result(r) -> dict:
+    return {
+        "id": r.id, "hostname": r.hostname, "ip_address": r.ip_address, "port": r.port,
+        "protocol": r.protocol, "status": r.status,
+        "expected_fingerprint": r.expected_fingerprint, "presented_fingerprint": r.presented_fingerprint,
+        "presented_subject": r.presented_subject, "presented_issuer": r.presented_issuer,
+        "presented_serial": r.presented_serial,
+        "not_before": r.not_before.isoformat() if r.not_before else None,
+        "not_after": r.not_after.isoformat() if r.not_after else None,
+        "discovery_source": r.discovery_source,
+        "error_code": r.error_code, "error_message": r.error_message,
+        "first_seen_at": r.first_seen_at.isoformat() if r.first_seen_at else None,
+        "last_seen_at": r.last_seen_at.isoformat() if r.last_seen_at else None,
+        "last_checked_at": r.last_checked_at.isoformat() if r.last_checked_at else None,
+    }
+
+
+@router.get("/{certificate_id}/usage")
+def certificate_usage(
+    certificate_id: int, db: DbSession, user: CurrentUser,
+    status: str | None = None, search: str | None = Query(default=None, max_length=253),
+    port: int | None = None,
+    page: int = Query(1, ge=1), page_size: int = Query(25, ge=1, le=250),
+):
+    from app.models.certificate_usage import CertificateUsageResult
+    from app.services.certificate_usage_service import usage_summary
+
+    q = db.query(CertificateUsageResult).filter(CertificateUsageResult.certificate_id == certificate_id)
+    if status:
+        q = q.filter(CertificateUsageResult.status == status)
+    if port is not None:
+        q = q.filter(CertificateUsageResult.port == port)
+    if search:
+        q = q.filter(CertificateUsageResult.hostname.ilike(f"%{search}%"))
+
+    total = q.count()
+    rows = (
+        q.order_by(CertificateUsageResult.hostname.asc())
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+        .all()
+    )
+    return {
+        "items": [_serialize_usage_result(r) for r in rows],
+        "total": total, "page": page, "page_size": page_size,
+        "pages": (total + page_size - 1) // page_size if page_size else 1,
+        "summary": usage_summary(db, certificate_id),
+    }
+
+
+@router.post("/{certificate_id}/usage/scan")
+def trigger_usage_scan(certificate_id: int, db: DbSession, user: CurrentUser, request: Request,
+                       body: dict[str, Any] | None = None):
+    if not has_permission(user.role_name.value, Perm["usage_scan"]):
+        raise PermissionDeniedError("You are not authorized to run wildcard certificate usage scans")
+    body = body or {}
+    sources = body.get("sources")
+    hostnames = body.get("hostnames")
+    ports = body.get("ports")
+    timeout = body.get("timeout")
+
+    from app.services.certificate_usage_service import get_wildcard_certificate, start_scan
+
+    if settings.celery_task_always_eager:
+        scan = start_scan(db, certificate_id, sources=sources, hostnames=hostnames, ports=ports,
+                          timeout=timeout, created_by=user.id)
+        return {"scan_id": scan.id, "status": scan.status, "candidates": scan.candidate_count,
+                "confirmed": scan.confirmed_count}
+
+    # Validate + create the scan row up front (not inside the task) so the
+    # frontend gets a scan_id to poll immediately, before a worker has even
+    # picked the task up — matches the "Certificate Usage Scan #184 RUNNING"
+    # live-progress UI, which a bare {"status": "queued"} can't support.
+    get_wildcard_certificate(db, certificate_id)
+    from app.models.certificate_usage import CertificateUsageScan
+    from app.tasks.discovery import run_certificate_usage_scan as run_usage_scan_task
+
+    pre = CertificateUsageScan(certificate_id=certificate_id, sources=sources or ["inventory", "manual"],
+                               created_by=user.id)
+    db.add(pre)
+    db.commit()
+    run_usage_scan_task.delay(certificate_id, sources, hostnames, ports, timeout, None, user.id, pre.id)
+    record(db, action="certificate.usage_scan.trigger", user_id=user.id, username=user.username,
+          resource_type="certificate", resource_id=certificate_id, result=AuditResult.SUCCESS,
+          ip_address=get_client_ip(request), user_agent=get_user_agent(request))
+    return {"status": "queued", "scan_id": pre.id}
+
+
 # ── Downloads (audited, permission-gated) ───────────────────────────────────
 @router.get("/{certificate_id}/download/{fmt}")
 def download_certificate(

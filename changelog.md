@@ -341,6 +341,44 @@ without.
 
 ---
 
+## [1.6.0] — 2026-09-09 — Wildcard certificate usage discovery
+
+### Added
+- **Wildcard certificate usage discovery** — for a wildcard certificate
+  (`*.example.com`), determines which real endpoints are *actually
+  presenting that exact certificate*, distinct from which hostnames the
+  wildcard merely covers. The authoritative result is always an exact
+  SHA-256 fingerprint match against a live TLS/SNI handshake — never CN/SAN/
+  wildcard coverage, DNS, or CT log presence, which are candidate signals
+  only. Statuses: `confirmed`, `different_certificate`, `unreachable`,
+  `dns_failed`, `tls_failed`, `timeout` — every failure stage is preserved
+  distinctly rather than collapsed into one generic failure.
+- Candidate hostnames from two sources (selectable per scan): existing
+  CertMgr inventory (managed servers + any certificate's tracked domains
+  under the same wildcard suffix) and manual hostnames (one per line,
+  optional `host:port`). Certificate verification is deliberately disabled
+  for the discovery probe itself — it asks "what did you present," not "is
+  it trusted" — with no effect on certificate validation anywhere else in
+  CertMgr.
+- Runs asynchronously via the existing Celery worker; unlike the other
+  discovery scans, the scan row is created *before* dispatch so the UI can
+  show live progress (candidates/scanned/confirmed/different/unreachable)
+  as soon as the request returns, not just after a worker picks it up.
+  Results are upserted per (certificate, hostname, ip, port) —
+  `first_seen_at` is preserved across rescans.
+- New "Usage Discovery" tab on the certificate detail page (wildcard
+  certificates only; others see an explanatory message), with a scan
+  dialog (sources, manual hostnames, ports, timeout), live progress bar,
+  summary counts, and a filterable results table.
+- Configurable via Settings: `cert_usage_scan.ports` (default
+  `443,8443,9443`), `cert_usage_scan.timeout_seconds` (default `5`),
+  `cert_usage_scan.max_concurrency` (default `25`). Permission
+  `certificate:usage_scan` (admin + certificate manager — the renew/revoke
+  tier, since this only probes known/supplied hostnames, never arbitrary
+  IP ranges like network_scan/ct_monitor's stricter admin-only bar).
+
+---
+
 ## [Unreleased] — Planned
 
 - SSO: LDAP/AD, OpenID Connect, OAuth2, SAML (settings scaffolding exists).

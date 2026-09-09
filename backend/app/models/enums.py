@@ -179,6 +179,7 @@ class JobType(StrEnum):
     REPORTS = "reports"
     NETWORK_SCAN = "network_scan"
     CT_MONITOR = "ct_monitor"
+    CERT_USAGE_SCAN = "cert_usage_scan"
 
 
 class JobStatus(StrEnum):
@@ -263,3 +264,25 @@ class FindingSeverity(StrEnum):
     MEDIUM = "medium"
     HIGH = "high"
     CRITICAL = "critical"
+
+
+class CertUsageScanStatus(StrEnum):
+    QUEUED = "queued"
+    RUNNING = "running"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
+
+
+class CertUsageResultStatus(StrEnum):
+    """The authoritative "using this certificate" determination is always
+    presented-fingerprint == expected-fingerprint — never CN/SAN/wildcard
+    coverage, DNS, or CT log presence. Those are candidate-discovery signals
+    only; CONFIRMED requires an exact match on the live TLS handshake."""
+
+    CONFIRMED = "confirmed"
+    DIFFERENT_CERTIFICATE = "different_certificate"
+    UNREACHABLE = "unreachable"
+    DNS_FAILED = "dns_failed"
+    TLS_FAILED = "tls_failed"
+    TIMEOUT = "timeout"

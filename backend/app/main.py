@@ -26,6 +26,7 @@ from app.api.v1 import (
     audit,
     auth,
     backups_router,
+    certificate_usage,
     certificates,
     compliance_router,
     dashboard,
@@ -181,6 +182,7 @@ def create_app() -> FastAPI:
     app.include_router(jobs.router, prefix=prefix)
     app.include_router(discovery_router, prefix=prefix)
     app.include_router(findings.router, prefix=prefix)
+    app.include_router(certificate_usage.router, prefix=prefix)
     app.include_router(health_router, prefix=prefix)
     app.include_router(providers_router, prefix=prefix)
     app.include_router(compliance_router, prefix=prefix)

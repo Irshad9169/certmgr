@@ -50,6 +50,14 @@ const STATUS_COLORS: Record<string, 'success' | 'error' | 'warning' | 'info' | '
   investigating: 'info',
   false_positive: 'default',
   resolved: 'success',
+  // Wildcard certificate usage discovery
+  confirmed: 'success',
+  different_certificate: 'warning',
+  dns_failed: 'error',
+  tls_failed: 'error',
+  timeout: 'warning',
+  completed: 'success',
+  cancelled: 'default',
   // Finding severity
   informational: 'default',
   low: 'info',

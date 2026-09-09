@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useNavigate, useParams } from 'react-router-dom'
 import {
@@ -7,14 +7,17 @@ import {
   Button,
   Card,
   CardContent,
+  Checkbox,
   Chip,
   Dialog,
   DialogActions,
   DialogContent,
   DialogTitle,
   FormControl,
+  FormControlLabel,
   Grid,
   InputLabel,
+  LinearProgress,
   MenuItem,
   Paper,
   Select,
@@ -26,6 +29,7 @@ import {
   TableHead,
   TableRow,
   Tabs,
+  TextField,
   Typography,
 } from '@mui/material'
 import AutorenewIcon from '@mui/icons-material/Autorenew'
@@ -39,6 +43,8 @@ import { ConfirmDialog, ErrorBox, Loading, PageHeader, StatusChip, Toast, daysCo
 import { useAuth } from '../lib/auth-context'
 
 const DELETABLE_STATUSES = ['failed', 'revoked', 'archived']
+const USAGE_STATUSES = ['confirmed', 'different_certificate', 'unreachable', 'dns_failed', 'tls_failed', 'timeout']
+const USAGE_PORTS = [443, 8443, 9443]
 
 interface NetworkSighting {
   id: number
@@ -62,6 +68,47 @@ interface CTFindingRow {
   last_seen_at?: string
 }
 
+interface UsageResult {
+  id: number
+  hostname: string
+  ip_address: string | null
+  port: number
+  status: string
+  presented_fingerprint: string | null
+  presented_subject: string | null
+  presented_issuer: string | null
+  discovery_source: string
+  error_code: string | null
+  error_message: string | null
+  first_seen_at?: string
+  last_seen_at?: string
+  last_checked_at?: string
+}
+
+interface UsageSummary {
+  candidates: number
+  confirmed: number
+  different_certificate: number
+  unreachable: number
+  dns_failed: number
+  tls_failed: number
+  timeout: number
+}
+
+interface UsageScan {
+  id: number
+  status: string
+  candidate_count: number
+  scanned_count: number
+  confirmed_count: number
+  different_certificate_count: number
+  unreachable_count: number
+  error_count: number
+  log?: string | null
+}
+
+const SCAN_TERMINAL_STATUSES = ['completed', 'failed', 'cancelled']
+
 export default function CertificateDetailPage() {
   const { id } = useParams()
   const certId = Number(id)
@@ -73,6 +120,17 @@ export default function CertificateDetailPage() {
   const [confirm, setConfirm] = useState<null | 'renew' | 'revoke' | 'deploy' | 'delete'>(null)
   const [revokeReason, setRevokeReason] = useState('unspecified')
   const [deployTarget, setDeployTarget] = useState({ server_id: 0, method: 'sftp', target_service: 'nginx' })
+
+  const [usageStatus, setUsageStatus] = useState('')
+  const [usagePort, setUsagePort] = useState('')
+  const [usageSearch, setUsageSearch] = useState('')
+  const [usagePage, setUsagePage] = useState(1)
+  const [scanDialogOpen, setScanDialogOpen] = useState(false)
+  const [scanSources, setScanSources] = useState({ inventory: true, manual: true })
+  const [scanHostnames, setScanHostnames] = useState('')
+  const [scanPorts, setScanPorts] = useState<Record<number, boolean>>({ 443: true, 8443: true, 9443: true })
+  const [scanTimeout, setScanTimeout] = useState(5)
+  const [activeScanId, setActiveScanId] = useState<number | null>(null)
 
   const cert = useQuery({
     queryKey: ['cert', certId],
@@ -104,6 +162,49 @@ export default function CertificateDetailPage() {
     queryKey: ['servers-min'],
     queryFn: () => api.get<Page<{ id: number; hostname: string }>>('/servers', { params: { page_size: 500 } }).then((r) => r.data),
     enabled: confirm === 'deploy',
+  })
+  const usageParams = {
+    status: usageStatus || undefined, port: usagePort || undefined,
+    search: usageSearch || undefined, page: usagePage, page_size: 25,
+  }
+  const usage = useQuery({
+    queryKey: ['cert-usage', certId, usageParams],
+    queryFn: () =>
+      api.get<Page<UsageResult> & { summary: UsageSummary }>(`/certificates/${certId}/usage`, { params: usageParams })
+        .then((r) => r.data),
+    enabled: tab === 5,
+  })
+  const scanProgress = useQuery({
+    queryKey: ['cert-usage-scan', activeScanId],
+    queryFn: () => api.get<UsageScan>(`/certificate-usage/scans/${activeScanId}`).then((r) => r.data),
+    enabled: activeScanId !== null,
+    refetchInterval: (query) => (query.state.data && SCAN_TERMINAL_STATUSES.includes(query.state.data.status) ? false : 2000),
+  })
+  useEffect(() => {
+    if (scanProgress.data && SCAN_TERMINAL_STATUSES.includes(scanProgress.data.status)) {
+      // Pull the freshly-finished scan's results into view, then stop polling.
+      qc.invalidateQueries({ queryKey: ['cert-usage', certId] })
+      setActiveScanId(null)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [scanProgress.data?.status])
+
+  const triggerScan = useMutation({
+    mutationFn: () => {
+      const hostnames = scanHostnames.split('\n').map((h) => h.trim()).filter(Boolean)
+      const sources = Object.entries(scanSources).filter(([, v]) => v).map(([k]) => k)
+      const ports = Object.entries(scanPorts).filter(([, v]) => v).map(([k]) => Number(k))
+      return api.post<{ scan_id?: number; status: string }>(`/certificates/${certId}/usage/scan`, {
+        sources, hostnames, ports, timeout: scanTimeout,
+      })
+    },
+    onSuccess: (res) => {
+      setScanDialogOpen(false)
+      setToast({ message: 'Usage discovery scan started', severity: 'success' })
+      if (res.data.scan_id) setActiveScanId(res.data.scan_id)
+      qc.invalidateQueries({ queryKey: ['cert-usage', certId] })
+    },
+    onError: (e) => setToast({ message: apiErrorMessage(e), severity: 'error' }),
   })
 
   const action = useMutation({
@@ -258,6 +359,7 @@ export default function CertificateDetailPage() {
           <Tab label="Downloads" />
           <Tab label="Seen on network" />
           <Tab label="CT Findings" />
+          <Tab label="Usage Discovery" />
         </Tabs>
       </Paper>
 
@@ -450,6 +552,179 @@ export default function CertificateDetailPage() {
             </Table>
           </TableContainer>
         ))}
+
+      {tab === 5 && (
+        !c.is_wildcard ? (
+          <Alert severity="info">
+            Usage discovery is only available for wildcard certificates (e.g. <code>*.example.com</code>) —
+            it determines which real endpoints are actually presenting <b>this exact</b> certificate,
+            distinct from which hostnames the wildcard merely covers.
+          </Alert>
+        ) : (
+          <Box>
+            <Card sx={{ mb: 2 }}>
+              <CardContent>
+                <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
+                  <Typography variant="h6">Wildcard certificate usage</Typography>
+                  {can('certificate:usage_scan') && (
+                    <Button variant="contained" onClick={() => setScanDialogOpen(true)} disabled={activeScanId !== null}>
+                      Scan Now
+                    </Button>
+                  )}
+                </Box>
+                {activeScanId !== null && scanProgress.data && (
+                  <Box sx={{ mb: 2 }}>
+                    <Typography variant="body2" sx={{ mb: 0.5 }}>
+                      Scan #{scanProgress.data.id} — {scanProgress.data.status.toUpperCase()} —{' '}
+                      {scanProgress.data.scanned_count}/{scanProgress.data.candidate_count} scanned
+                    </Typography>
+                    <LinearProgress
+                      variant={scanProgress.data.candidate_count ? 'determinate' : 'indeterminate'}
+                      value={scanProgress.data.candidate_count
+                        ? (scanProgress.data.scanned_count / scanProgress.data.candidate_count) * 100 : 0}
+                    />
+                  </Box>
+                )}
+                <Grid container spacing={2}>
+                  {[
+                    ['Candidates', usage.data?.summary?.candidates ?? 0, 'text.primary'],
+                    ['Confirmed', usage.data?.summary?.confirmed ?? 0, 'success.main'],
+                    ['Different', usage.data?.summary?.different_certificate ?? 0, 'warning.main'],
+                    ['Unreachable', usage.data?.summary?.unreachable ?? 0, 'error.main'],
+                  ].map(([label, value, color]) => (
+                    <Grid item xs={6} sm={3} key={label as string}>
+                      <Typography variant="caption" color="text.secondary">{label}</Typography>
+                      <Typography variant="h5" sx={{ color: color as string }}>{value}</Typography>
+                    </Grid>
+                  ))}
+                </Grid>
+              </CardContent>
+            </Card>
+
+            <Paper sx={{ mb: 2, p: 2 }}>
+              <Box sx={{ display: 'flex', gap: 1.5, flexWrap: 'wrap' }}>
+                <TextField
+                  label="Search hostname" size="small" sx={{ minWidth: 220 }}
+                  value={usageSearch}
+                  onChange={(e) => { setUsageSearch(e.target.value); setUsagePage(1) }}
+                />
+                <FormControl size="small" sx={{ minWidth: 170 }}>
+                  <InputLabel>Status</InputLabel>
+                  <Select label="Status" value={usageStatus} onChange={(e) => { setUsageStatus(e.target.value); setUsagePage(1) }}>
+                    <MenuItem value="">All</MenuItem>
+                    {USAGE_STATUSES.map((s) => <MenuItem key={s} value={s}>{s}</MenuItem>)}
+                  </Select>
+                </FormControl>
+                <FormControl size="small" sx={{ minWidth: 130 }}>
+                  <InputLabel>Port</InputLabel>
+                  <Select label="Port" value={usagePort} onChange={(e) => { setUsagePort(e.target.value); setUsagePage(1) }}>
+                    <MenuItem value="">All</MenuItem>
+                    {USAGE_PORTS.map((p) => <MenuItem key={p} value={p}>{p}</MenuItem>)}
+                  </Select>
+                </FormControl>
+              </Box>
+            </Paper>
+
+            {usage.isLoading ? (
+              <Loading />
+            ) : (
+              <TableContainer component={Paper}>
+                <Table size="small">
+                  <TableHead>
+                    <TableRow>
+                      <TableCell>Hostname</TableCell>
+                      <TableCell>IP</TableCell>
+                      <TableCell>Port</TableCell>
+                      <TableCell>Status</TableCell>
+                      <TableCell>Source</TableCell>
+                      <TableCell>Last checked</TableCell>
+                    </TableRow>
+                  </TableHead>
+                  <TableBody>
+                    {(usage.data?.items ?? []).map((r) => (
+                      <TableRow key={r.id}>
+                        <TableCell>{r.hostname}</TableCell>
+                        <TableCell>{r.ip_address ?? '—'}</TableCell>
+                        <TableCell>{r.port}</TableCell>
+                        <TableCell>
+                          <StatusChip value={r.status} />
+                          {r.error_message && (
+                            <Typography variant="caption" color="text.secondary" display="block">
+                              {r.error_message}
+                            </Typography>
+                          )}
+                        </TableCell>
+                        <TableCell>{r.discovery_source}</TableCell>
+                        <TableCell>{r.last_checked_at ? new Date(r.last_checked_at).toLocaleString() : '—'}</TableCell>
+                      </TableRow>
+                    ))}
+                    {(usage.data?.items ?? []).length === 0 && (
+                      <TableRow>
+                        <TableCell colSpan={6} align="center">
+                          No usage results yet — click "Scan Now" to discover which endpoints present this certificate
+                        </TableCell>
+                      </TableRow>
+                    )}
+                  </TableBody>
+                </Table>
+              </TableContainer>
+            )}
+          </Box>
+        )
+      )}
+
+      <Dialog open={scanDialogOpen} onClose={() => setScanDialogOpen(false)} maxWidth="xs" fullWidth>
+        <DialogTitle>Discover certificate usage</DialogTitle>
+        <DialogContent sx={{ display: 'flex', flexDirection: 'column', gap: 2, pt: 2 }}>
+          <Typography variant="body2" color="text.secondary">
+            Certificate: <b>{c.domain}</b>
+          </Typography>
+          <Box>
+            <Typography variant="subtitle2">Discovery sources</Typography>
+            <FormControlLabel
+              control={<Checkbox checked={scanSources.inventory}
+                onChange={(e) => setScanSources((s) => ({ ...s, inventory: e.target.checked }))} />}
+              label="Existing CertMgr inventory"
+            />
+            <FormControlLabel
+              control={<Checkbox checked={scanSources.manual}
+                onChange={(e) => setScanSources((s) => ({ ...s, manual: e.target.checked }))} />}
+              label="Manual hostnames"
+            />
+          </Box>
+          {scanSources.manual && (
+            <TextField
+              label="Hostnames (one per line, optionally host:port)"
+              multiline minRows={4} fullWidth
+              value={scanHostnames}
+              onChange={(e) => setScanHostnames(e.target.value)}
+              placeholder={'api.example.com\nportal.example.com\nvpn.example.com:8443'}
+            />
+          )}
+          <Box>
+            <Typography variant="subtitle2">Ports</Typography>
+            {USAGE_PORTS.map((p) => (
+              <FormControlLabel
+                key={p}
+                control={<Checkbox checked={!!scanPorts[p]}
+                  onChange={(e) => setScanPorts((s) => ({ ...s, [p]: e.target.checked }))} />}
+                label={String(p)}
+              />
+            ))}
+          </Box>
+          <TextField
+            label="Timeout (seconds)" type="number" size="small"
+            value={scanTimeout}
+            onChange={(e) => setScanTimeout(Number(e.target.value) || 5)}
+          />
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setScanDialogOpen(false)}>Cancel</Button>
+          <Button variant="contained" onClick={() => triggerScan.mutate()} disabled={triggerScan.isPending}>
+            Start Scan
+          </Button>
+        </DialogActions>
+      </Dialog>
 
       <ConfirmDialog
         open={confirm === 'renew'}

@@ -3,6 +3,7 @@
 from app.api.v1 import (
     audit,
     auth,
+    certificate_usage,
     certificates,
     dashboard,
     deployments,
@@ -28,8 +29,8 @@ from app.api.v1.extras import (
 )
 
 __all__ = [
-    "ai_router", "audit", "auth", "backups_router", "certificates", "compliance_router",
-    "dashboard", "deployments", "discovery_router", "findings", "health_router", "hooks", "jobs",
-    "notifications", "providers_router", "reports_router", "scheduled_jobs_router",
+    "ai_router", "audit", "auth", "backups_router", "certificate_usage", "certificates",
+    "compliance_router", "dashboard", "deployments", "discovery_router", "findings", "health_router",
+    "hooks", "jobs", "notifications", "providers_router", "reports_router", "scheduled_jobs_router",
     "search_router", "servers", "settings", "users", "webhooks_router",
 ]
