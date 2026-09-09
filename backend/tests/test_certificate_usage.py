@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from app.services.certificate_usage_service import (
     _candidate_hostnames_from_inventory,
+    _covered_by_single_label_wildcard,
     _is_ip_literal,
     _normalize_fingerprint,
     _parse_manual_hostnames,
@@ -64,6 +65,28 @@ def test_parse_manual_hostnames_deduplication_is_caller_responsibility():
     assert len(result) == 2
 
 
+def test_covered_by_single_label_wildcard_accepts_one_level():
+    assert _covered_by_single_label_wildcard("api.example.com", "example.com") is True
+
+
+def test_covered_by_single_label_wildcard_rejects_two_levels():
+    # *.example.com does not cover a.b.example.com — RFC 6125 wildcard
+    # matching only substitutes one DNS label, not arbitrary depth. A plain
+    # suffix check would wrongly accept this (regression: found live against
+    # *.magicjack.com pulling in an unrelated multi-level subdomain).
+    assert _covered_by_single_label_wildcard("site.subdomain.example.com", "example.com") is False
+
+
+def test_covered_by_single_label_wildcard_rejects_bare_apex():
+    # The apex domain itself needs its own SAN entry — the wildcard label
+    # alone doesn't imply it.
+    assert _covered_by_single_label_wildcard("example.com", "example.com") is False
+
+
+def test_covered_by_single_label_wildcard_rejects_unrelated_domain():
+    assert _covered_by_single_label_wildcard("api.otherdomain.com", "example.com") is False
+
+
 def test_candidate_hostnames_from_inventory_filters_by_suffix(db):
     from app.models.certificate import Certificate, CertificateDomain
     from app.models.enums import CertificateType, ValidationMethod
@@ -71,6 +94,8 @@ def test_candidate_hostnames_from_inventory_filters_by_suffix(db):
 
     db.add(Server(hostname="api.example.com", environment="production"))
     db.add(Server(hostname="unrelated.other.com", environment="production"))
+    # Two levels deep — *.example.com does not cover this; must be excluded.
+    db.add(Server(hostname="site.subdomain.example.com", environment="production"))
     cert = Certificate(domain="portal.example.com", cert_name="portal.example.com",
                        sans=["portal.example.com"], cert_type=CertificateType.SINGLE.value,
                        validation_method=ValidationMethod.HTTP_01.value)

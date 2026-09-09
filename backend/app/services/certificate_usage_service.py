@@ -105,23 +105,43 @@ def _wildcard_suffix(domain: str) -> str:
     return domain[2:] if domain.startswith("*.") else domain
 
 
+def _covered_by_single_label_wildcard(hostname: str, suffix: str) -> bool:
+    """Per RFC 6125/X.509 wildcard matching, "*.example.com" covers exactly
+    ONE additional DNS label — "api.example.com" is covered,
+    "a.b.example.com" is not (that needs its own "*.b.example.com" cert). A
+    plain suffix check (hostname.endswith(".example.com")) would wrongly
+    treat any subdomain depth as covered, pulling unrelated multi-level
+    hostnames into the candidate list. Also excludes the bare suffix itself
+    (the apex domain isn't covered by the wildcard label at all — it needs
+    its own SAN entry, which the caller can already see and doesn't need
+    this function to infer)."""
+    h = hostname.rstrip(".")
+    s = suffix.rstrip(".").lower()
+    if not h.endswith(f".{s}"):
+        return False
+    remainder = h[: -(len(s) + 1)]
+    return bool(remainder) and "." not in remainder
+
+
 def _candidate_hostnames_from_inventory(db: Session, suffix: str) -> set[str]:
     """Reuse hostnames CertMgr already knows about: managed servers and
-    domains from any certificate record (its own or others') under the same
-    wildcard suffix — e.g. if *.example.com is selected, "api.example.com"
-    already tracked as its own certificate's domain is an obvious candidate.
-    """
-    suffix_l = suffix.lower()
+    domains from any certificate record (its own or others') that are
+    actually covered by this wildcard's single-label scope — e.g. if
+    *.example.com is selected, "api.example.com" already tracked as its own
+    certificate's domain is an obvious candidate, but "api.internal
+    .example.com" is not (a different, deeper wildcard would be needed to
+    cover that, so surfacing it here would be a false candidate the live
+    probe could never confirm)."""
     candidates: set[str] = set()
 
     for (hostname,) in db.query(Server.hostname).all():
         h = (hostname or "").strip().lower()
-        if h and (h == suffix_l or h.endswith(f".{suffix_l}")):
+        if h and _covered_by_single_label_wildcard(h, suffix):
             candidates.add(h)
 
     for (domain,) in db.query(CertificateDomain.domain).all():
         d = (domain or "").strip().lower()
-        if d and not d.startswith("*.") and (d == suffix_l or d.endswith(f".{suffix_l}")):
+        if d and not d.startswith("*.") and _covered_by_single_label_wildcard(d, suffix):
             candidates.add(d)
 
     return candidates

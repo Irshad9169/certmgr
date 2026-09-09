@@ -207,11 +207,12 @@ def test_async_usage_scan_trigger_returns_a_pollable_scan_id(client, admin_heade
     and its id returned BEFORE a worker picks up the task, so the frontend
     has something to poll immediately (rather than a bare {"status":
     "queued"}, which the other discovery scans return with no id)."""
+    from conftest import SessionLocal
+
     from app.core.config import settings
     from app.models.certificate import Certificate
     from app.models.certificate_usage import CertificateUsageScan
     from app.models.enums import CertificateType, ValidationMethod
-    from conftest import SessionLocal
 
     monkeypatch.setattr(settings, "celery_task_always_eager", False)
     monkeypatch.setattr("app.tasks.discovery.run_certificate_usage_scan.delay", lambda *a, **k: None)
