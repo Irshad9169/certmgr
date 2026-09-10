@@ -477,6 +477,32 @@ without.
 
 ---
 
+## [1.6.4] — 2026-09-10 — Fix stuck discovery runs (filesystem/network/CT)
+
+### Fixed
+- Root cause of a real CT monitor run sitting at `running` for days with
+  zero progress: `httpx.get()`'s `timeout` parameter does not bound DNS
+  resolution — `socket.getaddrinfo()`, called internally before a
+  timeout-aware socket even exists, has no timeout of its own anywhere in
+  the Python stdlib. A hung resolver blocked the whole crt.sh call forever
+  regardless of the configured timeout. Same root cause independently
+  found and fixed for usage discovery's own DNS resolution just before
+  this — backported here as a hard, thread-bounded wrapper around every
+  crt.sh request.
+- Ported the same stuck-scan safety net built for
+  `CertificateUsageScan` onto `DiscoveryRun` (shared by filesystem/network/
+  CT scans): an unhandled exception in the scan body now marks the row
+  `failed` instead of leaving it stuck, and a `running` run older than 60
+  minutes is detected as stale and marked failed whenever the runs list is
+  viewed.
+
+### Added
+- `POST /discovery/runs/{id}/cancel` and a **Cancel** button on any
+  running row in the Discovery page — lets an admin manually stop a run
+  stuck making no progress instead of waiting out the timeout.
+
+---
+
 ## [Unreleased] — Planned
 
 - SSO: LDAP/AD, OpenID Connect, OAuth2, SAML (settings scaffolding exists).
