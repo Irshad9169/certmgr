@@ -15,7 +15,11 @@ from app.core.exceptions import ValidationAppError
 from app.models.certificate import Certificate
 from app.models.certificate_usage import CertificateUsageResult
 from app.models.enums import CertificateType, ValidationMethod
-from app.services.certificate_usage_service import probe_hostname, start_scan
+from app.services.certificate_usage_service import (
+    probe_hostname,
+    probe_hostname_with_port_fallback,
+    start_scan,
+)
 from app.services.network_scanner import build_scan_context
 from app.services.x509_utils import parse_certificate
 
@@ -379,3 +383,107 @@ def test_bulk_usage_scan_runs_eligible_certificates_and_reports_ineligible_as_fa
     assert result == {"queued": 1, "failed": 1}
     assert db.query(CertificateUsageScan).filter(CertificateUsageScan.certificate_id == eligible.id).count() == 1
     assert db.query(CertificateUsageScan).filter(CertificateUsageScan.certificate_id == ineligible.id).count() == 0
+
+
+def _closed_port() -> int:
+    """A port nothing is listening on — reliably fails to connect (unlike a
+    fixed low port number, whose refuse-vs-silently-drop behavior varies by
+    platform/firewall, see test_probe_reports_failure_status_for_closed_port)."""
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    s.bind(("127.0.0.1", 0))
+    port = s.getsockname()[1]
+    s.close()
+    return port
+
+
+def test_port_fallback_stops_at_first_reachable_port(tls_server, monkeypatch):
+    server, cert_pem = tls_server
+    _, meta = parse_certificate(cert_pem)
+    ctx = build_scan_context()
+    calls: list[int] = []
+
+    from app.services import certificate_usage_service as svc
+
+    real_probe = svc.probe_hostname
+
+    def _counting_probe(hostname, port, expected, *, timeout, ctx):
+        calls.append(port)
+        return real_probe(hostname, port, expected, timeout=timeout, ctx=ctx)
+
+    monkeypatch.setattr(svc, "probe_hostname", _counting_probe)
+
+    port, result = probe_hostname_with_port_fallback(
+        "127.0.0.1", [server.port, _closed_port()], meta.fingerprint_sha256, timeout=2, ctx=ctx,
+    )
+
+    assert port == server.port
+    assert result.status == "confirmed"
+    assert calls == [server.port]  # the second (unreachable) port was never tried
+
+
+def test_port_fallback_tries_next_port_when_first_unreachable(tls_server):
+    server, cert_pem = tls_server
+    _, meta = parse_certificate(cert_pem)
+    ctx = build_scan_context()
+    unreachable = _closed_port()  # freshly bound-then-closed, guaranteed distinct from server.port
+
+    port, result = probe_hostname_with_port_fallback(
+        "127.0.0.1", [unreachable, server.port], meta.fingerprint_sha256, timeout=2, ctx=ctx,
+    )
+
+    assert port == server.port
+    assert result.status == "confirmed"
+
+
+def test_port_fallback_reports_first_configured_port_when_nothing_reachable():
+    ctx = build_scan_context()
+    port_a, port_b = _closed_port(), _closed_port()
+
+    port, result = probe_hostname_with_port_fallback(
+        "127.0.0.1", [port_a, port_b], "irrelevant", timeout=1, ctx=ctx,
+    )
+
+    assert port == port_a  # always reported at the first configured port
+    assert result.status in ("unreachable", "timeout")
+
+
+def test_port_fallback_skips_remaining_ports_after_dns_failure(monkeypatch):
+    from app.services import certificate_usage_service as svc
+
+    calls: list[int] = []
+    real_probe = svc.probe_hostname
+
+    def _counting_probe(hostname, port, expected, *, timeout, ctx):
+        calls.append(port)
+        return real_probe(hostname, port, expected, timeout=timeout, ctx=ctx)
+
+    monkeypatch.setattr(svc, "probe_hostname", _counting_probe)
+    ctx = build_scan_context()
+
+    port, result = probe_hostname_with_port_fallback(
+        "this-host-does-not-exist.invalid", [443, 8443, 9443], "irrelevant", timeout=1, ctx=ctx,
+    )
+
+    assert result.status == "dns_failed"
+    assert port == 443
+    assert calls == [443]  # DNS failure is host-level — 8443/9443 never attempted
+
+
+def test_start_scan_records_one_result_not_one_per_configured_port(db, tls_server):
+    """Regression: candidates used to be expanded across every configured
+    port unconditionally, creating one (mostly unreachable) row per port per
+    hostname. With port fallback, a hostname reachable on the first
+    configured port produces exactly one result row."""
+    server, cert_pem = tls_server
+    _, meta = parse_certificate(cert_pem)
+    cert = _make_wildcard_cert(db, fingerprint=meta.fingerprint_sha256)
+    unreachable = _closed_port()
+
+    scan = start_scan(db, cert.id, sources=["manual"], hostnames=["127.0.0.1"],
+                      ports=[server.port, unreachable], timeout=2)
+
+    assert scan.candidate_count == 1
+    assert scan.scanned_count == 1
+    result = db.query(CertificateUsageResult).filter(CertificateUsageResult.certificate_id == cert.id).one()
+    assert result.port == server.port
+    assert result.status == "confirmed"

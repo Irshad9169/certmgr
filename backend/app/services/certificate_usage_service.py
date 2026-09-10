@@ -291,6 +291,49 @@ def probe_hostname(hostname: str, port: int, expected_fingerprint: str, *,
     )
 
 
+_CONNECTIVITY_FAILURES = frozenset({
+    CertUsageResultStatus.DNS_FAILED.value,
+    CertUsageResultStatus.UNREACHABLE.value,
+    CertUsageResultStatus.TIMEOUT.value,
+})
+
+
+def probe_hostname_with_port_fallback(
+    hostname: str, ports: list[int], expected_fingerprint: str, *, timeout: float, ctx: ssl.SSLContext
+) -> tuple[int, _ProbeResult]:
+    """Try each configured port in order, stopping at the first one that's
+    actually reachable — once an endpoint answers at all (even with the
+    wrong certificate, or a broken TLS handshake), there's no value in also
+    checking the other configured ports for the same hostname. Only a
+    connectivity-level failure (DNS/TCP/timeout) at every configured port
+    falls through to trying the next one.
+
+    A DNS failure is host-level, not port-level — every other port would
+    fail identically, so the remaining ports are skipped entirely rather
+    than repeating the same DNS lookup for no reason.
+
+    If nothing is reachable at all, the result is reported at ports[0] —
+    the canonical "this hostname is unreachable" answer, rather than one
+    redundant unreachable row per configured port."""
+    if not ports:
+        raise ValueError("ports must be non-empty")
+
+    first_port, first_result = ports[0], probe_hostname(
+        hostname, ports[0], expected_fingerprint, timeout=timeout, ctx=ctx
+    )
+    if first_result.status not in _CONNECTIVITY_FAILURES or first_result.status == CertUsageResultStatus.DNS_FAILED.value:
+        # Either reachable (nothing more to check), or a host-level DNS
+        # failure (every other port would fail identically) — stop here.
+        return first_port, first_result
+
+    for port in ports[1:]:
+        result = probe_hostname(hostname, port, expected_fingerprint, timeout=timeout, ctx=ctx)
+        if result.status not in _CONNECTIVITY_FAILURES:
+            return port, result
+
+    return first_port, first_result
+
+
 def _record_result(db: Session, scan: CertificateUsageScan, certificate: Certificate,
                    hostname: str, port: int, source: str, probe: _ProbeResult) -> str:
     """Upsert-in-place: first_seen_at is preserved across rescans."""
@@ -376,30 +419,35 @@ def start_scan(
 
     suffixes = _wildcard_suffixes(certificate)
 
-    # Keyed on (hostname, port) — NOT hostname alone — so a host proposed by
-    # two sources with different ports keeps both, instead of one silently
-    # overwriting the other. Sources are applied in ascending order of
-    # confidence: a network sighting is a *physically observed* fact, so it
-    # takes precedence over a same-endpoint guess from a lower-confidence
-    # source if both happen to name the same (hostname, port).
-    target_source: dict[tuple[str, int], str] = {}
+    # Two shapes of candidate, handled differently:
+    #  - fallback_hostnames: no specific port in mind — try resolved_ports in
+    #    order and stop at the first reachable one (see
+    #    probe_hostname_with_port_fallback), instead of unconditionally
+    #    probing every configured port for every hostname.
+    #  - explicit_targets: a specific (hostname, port) is already known
+    #    (manual "host:port", or a network sighting's own observed port) —
+    #    probed exactly once, no fallback.
+    # Precedence when the same hostname/target is named by more than one
+    # source: manual (explicit user intent) beats inventory/sans, and a
+    # network sighting (a physically observed fact) is tracked separately
+    # by (hostname, port) so it never gets silently dropped by either.
+    fallback_hostnames: dict[str, str] = {}
+    explicit_targets: dict[tuple[str, int], str] = {}
     if "inventory" in resolved_sources:
         for h in _candidate_hostnames_from_inventory(db, suffixes):
-            for port in resolved_ports:
-                target_source[(h, port)] = "inventory"
+            fallback_hostnames[h] = "inventory"
     if "sans" in resolved_sources:
         for h in _literal_sans(certificate):
-            for port in resolved_ports:
-                target_source[(h, port)] = "certificate_sans"
+            fallback_hostnames[h] = "certificate_sans"
     if "manual" in resolved_sources and hostnames:
         for h, explicit_port in _parse_manual_hostnames(hostnames):
-            for port in ([explicit_port] if explicit_port else resolved_ports):
-                target_source[(h, port)] = "manual"
+            if explicit_port:
+                explicit_targets[(h, explicit_port)] = "manual"
+            else:
+                fallback_hostnames[h] = "manual"
     if "network_sightings" in resolved_sources:
         for h, p in _candidate_targets_from_network_sightings(db, certificate.id):
-            target_source[(h, p)] = "network_sighting"
-
-    targets: list[tuple[str, int, str]] = [(h, p, source) for (h, p), source in target_source.items()]
+            explicit_targets[(h, p)] = "network_sighting"
 
     scan = db.get(CertificateUsageScan, scan_id) if scan_id is not None else None
     if scan is None:
@@ -408,10 +456,10 @@ def start_scan(
     scan.status = CertUsageScanStatus.RUNNING.value
     scan.sources = resolved_sources
     scan.started_at = utcnow()
-    scan.candidate_count = len(targets)
+    scan.candidate_count = len(fallback_hostnames) + len(explicit_targets)
     db.commit()
 
-    if not targets:
+    if not fallback_hostnames and not explicit_targets:
         scan.status = CertUsageScanStatus.COMPLETED.value
         scan.completed_at = utcnow()
         scan.log = "No candidate hostnames — nothing to scan."
@@ -428,23 +476,40 @@ def start_scan(
         CertUsageResultStatus.TIMEOUT.value: 0,
     }
 
+    def _finish(hostname: str, port: int, source: str, probe: _ProbeResult) -> None:
+        status = _record_result(db, scan, certificate, hostname, port, source, probe)
+        counts[status] = counts.get(status, 0) + 1
+        scan.scanned_count += 1
+
     # Worker threads perform ONLY network I/O — no DB session touched here,
     # matching network_scanner.scan_targets()'s exact concurrency pattern.
     with ThreadPoolExecutor(max_workers=max(resolved_concurrency, 1)) as pool:
-        futures = {
+        fallback_futures = {
+            pool.submit(probe_hostname_with_port_fallback, hostname, resolved_ports,
+                       certificate.fingerprint_sha256 or "", timeout=resolved_timeout, ctx=ctx): (hostname, source)
+            for hostname, source in fallback_hostnames.items()
+        }
+        explicit_futures = {
             pool.submit(probe_hostname, hostname, port, certificate.fingerprint_sha256 or "",
                        timeout=resolved_timeout, ctx=ctx): (hostname, port, source)
-            for hostname, port, source in targets
+            for (hostname, port), source in explicit_targets.items()
         }
-        for future, (hostname, port, source) in futures.items():
+        for future, (hostname, source) in fallback_futures.items():
+            try:
+                port, probe = future.result()
+            except Exception as exc:  # noqa: BLE001
+                port, probe = resolved_ports[0], _ProbeResult(
+                    status=CertUsageResultStatus.UNREACHABLE.value,
+                    error_code="probe_error", error_message=str(exc)[:500],
+                )
+            _finish(hostname, port, source, probe)
+        for future, (hostname, port, source) in explicit_futures.items():
             try:
                 probe = future.result()
             except Exception as exc:  # noqa: BLE001
                 probe = _ProbeResult(status=CertUsageResultStatus.UNREACHABLE.value,
                                      error_code="probe_error", error_message=str(exc)[:500])
-            status = _record_result(db, scan, certificate, hostname, port, source, probe)
-            counts[status] = counts.get(status, 0) + 1
-            scan.scanned_count += 1
+            _finish(hostname, port, source, probe)
 
     scan.confirmed_count = counts[CertUsageResultStatus.CONFIRMED.value]
     scan.different_certificate_count = counts[CertUsageResultStatus.DIFFERENT_CERTIFICATE.value]

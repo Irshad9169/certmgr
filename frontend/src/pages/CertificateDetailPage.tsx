@@ -121,7 +121,7 @@ export default function CertificateDetailPage() {
   const [revokeReason, setRevokeReason] = useState('unspecified')
   const [deployTarget, setDeployTarget] = useState({ server_id: 0, method: 'sftp', target_service: 'nginx' })
 
-  const [usageStatus, setUsageStatus] = useState('')
+  const [usageStatus, setUsageStatus] = useState('confirmed')
   const [usagePort, setUsagePort] = useState('')
   const [usageSearch, setUsageSearch] = useState('')
   const [usagePage, setUsagePage] = useState(1)
