@@ -6,11 +6,13 @@ matches private keys to certificates, and imports new discoveries.
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 from pathlib import Path
 
 from cryptography.hazmat.primitives import serialization
 from sqlalchemy.orm import Session
 
+from app.core.exceptions import ValidationAppError
 from app.core.logging import get_logger
 from app.core.timeutils import ensure_aware, utcnow
 from app.models.certificate import Certificate, CertificateDomain
@@ -73,6 +75,67 @@ def settings_scan_paths(db: Session | None = None) -> list[str]:
     return DEFAULT_SCAN_PATHS
 
 
+_STALE_RUN_MINUTES = 60
+
+
+@contextmanager
+def _tracked_run(db: Session, run: DiscoveryRun):
+    """Marks `run` failed (instead of leaving it stuck at "running"
+    forever) if the wrapped scan body raises anything unhandled — the
+    exact bug class that left a real CT monitor run stuck for days with
+    zero progress, requiring manual DB cleanup. Root causes get fixed at
+    their source (e.g. ct_monitor.py's DNS-hang protection) — this is the
+    safety net for whatever's left."""
+    try:
+        yield
+    except Exception as exc:  # noqa: BLE001
+        db.rollback()
+        run.status = "failed"
+        run.finished_at = utcnow()
+        run.log = f"Scan failed: {exc}"[:2000]
+        db.commit()
+        logger.error("discovery run #%s failed: %s", run.id, exc)
+
+
+def mark_stale_run_failed(db: Session, run: DiscoveryRun) -> None:
+    """A worker crash or deploy restart mid-scan leaves the row at
+    "running" forever — no exception handler can catch the process simply
+    dying. Checked lazily whenever a run is read: a "running" run started
+    more than _STALE_RUN_MINUTES ago is treated as dead. Generous on
+    purpose (network/CT scans can legitimately take a while against many
+    targets/domains) — a safety net, not a tight SLA."""
+    if run.status != "running" or run.started_at is None:
+        return
+    from datetime import timedelta
+
+    if utcnow() - ensure_aware(run.started_at) < timedelta(minutes=_STALE_RUN_MINUTES):
+        return
+    run.status = "failed"
+    run.finished_at = utcnow()
+    run.log = (
+        f"Marked failed: no progress for over {_STALE_RUN_MINUTES} minutes — "
+        "the worker likely crashed, was restarted, or got stuck (e.g. a hung DNS lookup)."
+    )
+    db.commit()
+    logger.warning("discovery run #%s marked failed as stale (started_at=%s)", run.id, run.started_at)
+
+
+def cancel_run(db: Session, run: DiscoveryRun) -> None:
+    """Manual stop — for when an admin doesn't want to wait out
+    _STALE_RUN_MINUTES. This only marks the row; it does not (and cannot,
+    without tracking the underlying Celery task id, which this run
+    predates) forcibly kill an actually-still-alive worker thread. In
+    practice that's fine: the scenario this addresses is a scan stuck on a
+    hung network call that will never make progress on its own, not a
+    healthy scan someone wants to abort early."""
+    if run.status != "running":
+        raise ValidationAppError("Only a running scan can be cancelled")
+    run.status = "cancelled"
+    run.finished_at = utcnow()
+    run.log = "Cancelled by an administrator."
+    db.commit()
+
+
 def run_discovery(db: Session, *, extra_paths: list[str] | None = None,
                   created_by: int | None = None) -> DiscoveryRun:
     run = DiscoveryRun(
@@ -83,7 +146,12 @@ def run_discovery(db: Session, *, extra_paths: list[str] | None = None,
     )
     db.add(run)
     db.commit()
+    with _tracked_run(db, run):
+        return _run_discovery_body(db, run, created_by=created_by)
+    return run
 
+
+def _run_discovery_body(db: Session, run: DiscoveryRun, *, created_by: int | None) -> DiscoveryRun:
     logs: list[str] = []
     found = 0
     seen_fingerprints = {c.fingerprint_sha256 for c in db.query(Certificate).all() if c.fingerprint_sha256}
@@ -167,13 +235,25 @@ def run_network_scan(
     )
     db.add(run)
     db.commit()
+    with _tracked_run(db, run):
+        return _run_network_scan_body(
+            db, run, hosts, resolved_ports, resolved_concurrency, resolved_timeout, created_by=created_by,
+        )
+    return run
 
+
+def _run_network_scan_body(
+    db: Session, run: DiscoveryRun, hosts: list[str], resolved_ports: list[int],
+    resolved_concurrency: int, resolved_timeout: float, *, created_by: int | None,
+) -> DiscoveryRun:
     logs: list[str] = []
     found = 0
     # Certificates a user deliberately deleted from tracking must stay
     # gone — same set run_discovery() builds, so deleting a network-found
     # certificate here also stops the next scan from just recreating it.
     ignored_fingerprints = {i.fingerprint_sha256 for i in db.query(DiscoveryIgnore).all()}
+    from app.services import network_scanner
+
     results = network_scanner.scan_targets(
         hosts, resolved_ports, concurrency=resolved_concurrency, timeout=resolved_timeout
     )
@@ -324,8 +404,6 @@ def run_ct_monitor(
     *issued* — including a certificate that was never deployed anywhere,
     e.g. a mis-issued/rogue certificate for your domain from an unexpected CA.
     """
-    from app.services import ct_monitor
-
     resolved_expected_issuers = expected_issuers if expected_issuers is not None else [
         e for e in _tls_scan_setting(db, "ct_monitoring.expected_issuers", "").split(",") if e.strip()
     ]
@@ -352,6 +430,20 @@ def run_ct_monitor(
     )
     db.add(run)
     db.commit()
+    with _tracked_run(db, run):
+        return _run_ct_monitor_body(
+            db, run, domains, max_certs, resolved_expected_issuers, resolved_sensitive, resolved_staging,
+            created_by=created_by,
+        )
+    return run
+
+
+def _run_ct_monitor_body(
+    db: Session, run: DiscoveryRun, domains: list[str], max_certs: int,
+    resolved_expected_issuers: list[str], resolved_sensitive: list[str], resolved_staging: list[str],
+    *, created_by: int | None,
+) -> DiscoveryRun:
+    from app.services import ct_monitor
 
     logs: list[str] = []
     found = 0

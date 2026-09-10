@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from app.services.ct_monitor import (
     classify_domain_match,
+    fetch_crtsh_entries,
     risk_score_for,
     risk_severity,
     run_detections,
@@ -130,3 +131,27 @@ def test_risk_severity_buckets():
     assert risk_severity(89) == "high"
     assert risk_severity(90) == "critical"
     assert risk_severity(100) == "critical"
+
+
+def test_fetch_crtsh_entries_bounds_a_hanging_call(monkeypatch):
+    """httpx's own `timeout` parameter does not reliably bound DNS
+    resolution (socket.getaddrinfo() has no timeout of its own anywhere in
+    the stdlib) — found live: a real CT monitor scan stuck at "running" for
+    days with zero progress. A hang anywhere inside the request must not
+    block past the hard outer bound (timeout + 5s grace)."""
+    import time
+
+    from app.services import ct_monitor
+
+    def _hang(*a, **k):
+        time.sleep(10)
+        raise AssertionError("should never actually complete — the hard timeout must fire first")
+
+    monkeypatch.setattr(ct_monitor.httpx, "get", _hang)
+
+    start = time.monotonic()
+    result = fetch_crtsh_entries("example.com", limit=10, timeout=0.5)
+    elapsed = time.monotonic() - start
+
+    assert result is None
+    assert elapsed < 8  # bounded by timeout + grace (0.5 + 5 = 5.5s), nowhere near the 10s hang

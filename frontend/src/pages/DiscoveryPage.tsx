@@ -141,6 +141,15 @@ export default function DiscoveryPage() {
     onError: (e) => setToast({ message: apiErrorMessage(e), severity: 'error' }),
   })
 
+  const cancelRun = useMutation({
+    mutationFn: (runId: number) => api.post(`/discovery/runs/${runId}/cancel`),
+    onSuccess: () => {
+      setToast({ message: 'Run cancelled', severity: 'success' })
+      qc.invalidateQueries({ queryKey: ['discovery-runs'] })
+    },
+    onError: (e) => setToast({ message: apiErrorMessage(e), severity: 'error' }),
+  })
+
   return (
     <Box>
       <PageHeader
@@ -311,6 +320,7 @@ export default function DiscoveryPage() {
                 <TableCell>Skipped</TableCell>
                 <TableCell>Started</TableCell>
                 <TableCell>Log</TableCell>
+                <TableCell />
               </TableRow>
             </TableHead>
             <TableBody>
@@ -341,6 +351,17 @@ export default function DiscoveryPage() {
                       <summary style={{ cursor: 'pointer', fontSize: 12 }}>view log</summary>
                       <pre className="console-output" style={{ marginTop: 6 }}>{r.log}</pre>
                     </details>
+                  </TableCell>
+                  <TableCell>
+                    {r.status === 'running' && (canNetworkScan || canCtMonitor) && (
+                      <Button
+                        size="small" color="error" variant="outlined"
+                        onClick={() => cancelRun.mutate(r.id)}
+                        disabled={cancelRun.isPending}
+                      >
+                        Cancel
+                      </Button>
+                    )}
                   </TableCell>
                 </TableRow>
               ))}

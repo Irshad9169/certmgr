@@ -313,3 +313,37 @@ def test_cert_manager_can_bulk_usage_scan(client, role_headers_factory):
                        json={"action": "usage_scan", "ids": [cert_id], "options": {"sources": ["manual"]}})
     assert resp.status_code == 200, resp.text
     assert resp.json()["queued"] == 1
+
+
+def test_read_only_cannot_cancel_discovery_run(client, role_headers_factory):
+    headers = role_headers_factory("ro_cancel_run", "read_only")
+    resp = client.post("/api/v1/discovery/runs/999999/cancel", headers=headers)
+    assert resp.status_code == 403
+
+
+def test_cert_manager_cannot_cancel_discovery_run(client, role_headers_factory):
+    """CT monitoring / network scanning are admin-only; cancelling one is
+    the same tier of action as starting one."""
+    headers = role_headers_factory("cm_cancel_run", "certificate_manager")
+    resp = client.post("/api/v1/discovery/runs/999999/cancel", headers=headers)
+    assert resp.status_code == 403
+
+
+def test_admin_can_cancel_a_running_discovery_run(client, admin_headers):
+    from conftest import SessionLocal
+
+    from app.core.timeutils import utcnow
+    from app.models.job import DiscoveryRun
+
+    db = SessionLocal()
+    try:
+        run = DiscoveryRun(started_at=utcnow(), status="running", scan_type="ct_log", scan_domains=["example.com"])
+        db.add(run)
+        db.commit()
+        run_id = run.id
+    finally:
+        db.close()
+
+    resp = client.post(f"/api/v1/discovery/runs/{run_id}/cancel", headers=admin_headers)
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["status"] == "cancelled"

@@ -19,6 +19,9 @@ this substring search can produce as a side effect.
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import TimeoutError as FutureTimeoutError
+
 import httpx
 
 from app.core.logging import get_logger
@@ -30,6 +33,28 @@ _CRTSH_BASE = "https://crt.sh/"
 _DEFAULT_TIMEOUT = 15.0
 
 
+def _get_with_hard_timeout(url: str, *, params: dict, timeout: float) -> httpx.Response:
+    """httpx's own `timeout` parameter does not reliably bound DNS
+    resolution — socket.getaddrinfo(), called internally before a
+    timeout-aware socket even exists, has no timeout of its own anywhere in
+    the Python stdlib. A resolver that never answers can block the whole
+    call forever regardless of the timeout passed to httpx.get(). Found
+    live: a CT monitor scan stuck at "running" for days with zero
+    progress — the same root cause independently found and fixed for
+    usage discovery's own DNS resolution earlier this session
+    (certificate_usage_service._resolve_with_timeout). Wrapping the entire
+    call in a bounded worker thread means a hang here can only ever cost
+    this one request its configured timeout, never more — the extra grace
+    period lets httpx's own timeout fire first (and raise its normal,
+    specific exception) in the common case; the hard bound only kicks in
+    when that mechanism itself is what's stuck."""
+    pool = ThreadPoolExecutor(max_workers=1)
+    try:
+        return pool.submit(httpx.get, url, params=params, timeout=timeout).result(timeout=timeout + 5)
+    finally:
+        pool.shutdown(wait=False)
+
+
 def fetch_crtsh_entries(domain: str, *, limit: int, timeout: float = _DEFAULT_TIMEOUT) -> list[dict] | None:
     """Query crt.sh for a domain. Returns None if the query failed outright
     — crt.sh is a community service with no contracted SLA (confirmed live:
@@ -39,10 +64,10 @@ def fetch_crtsh_entries(domain: str, *, limit: int, timeout: float = _DEFAULT_TI
     treating both the same way. Returns [] only for a genuine empty result
     (a valid JSON list with nothing in it)."""
     try:
-        resp = httpx.get(_CRTSH_BASE, params={"q": domain, "output": "json"}, timeout=timeout)
+        resp = _get_with_hard_timeout(_CRTSH_BASE, params={"q": domain, "output": "json"}, timeout=timeout)
         resp.raise_for_status()
         data = resp.json()
-    except (httpx.HTTPError, ValueError) as exc:
+    except (httpx.HTTPError, ValueError, FutureTimeoutError) as exc:
         logger.warning("crt.sh query failed for %s: %s", domain, exc)
         return None
     if not isinstance(data, list):
@@ -56,9 +81,9 @@ def fetch_crtsh_certificate_pem(crt_sh_id: int, *, timeout: float = _DEFAULT_TIM
     not already recorded (see discovery_service.run_ct_monitor) — this is the
     expensive path, bounded to genuinely new discoveries."""
     try:
-        resp = httpx.get(_CRTSH_BASE, params={"d": crt_sh_id}, timeout=timeout)
+        resp = _get_with_hard_timeout(_CRTSH_BASE, params={"d": crt_sh_id}, timeout=timeout)
         resp.raise_for_status()
-    except httpx.HTTPError as exc:
+    except (httpx.HTTPError, FutureTimeoutError) as exc:
         logger.warning("crt.sh certificate fetch failed for id=%s: %s", crt_sh_id, exc)
         return None
     return resp.content

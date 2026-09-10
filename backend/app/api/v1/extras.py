@@ -119,8 +119,11 @@ def discovery_runs(db: DbSession, user: CurrentUser, limit: int = Query(20, ge=1
     if not has_permission(user.role_name.value, P_["discovery"]["view"]):
         raise PermissionDeniedError("You are not authorized to view discovery runs")
     from app.models.job import DiscoveryRun
+    from app.services.discovery_service import mark_stale_run_failed
 
     rows = db.query(DiscoveryRun).order_by(DiscoveryRun.started_at.desc()).limit(limit).all()
+    for r in rows:
+        mark_stale_run_failed(db, r)
     return [
         {
             "id": r.id, "status": r.status, "scan_paths": r.scan_paths or [],
@@ -133,6 +136,29 @@ def discovery_runs(db: DbSession, user: CurrentUser, limit: int = Query(20, ge=1
         }
         for r in rows
     ]
+
+
+@discovery_router.post("/runs/{run_id}/cancel")
+def cancel_discovery_run(run_id: int, db: DbSession, user: CurrentUser, request: Request):
+    """Manual stop for a run stuck making no progress — marks it cancelled
+    rather than waiting out the automatic staleness timeout. Admin-only,
+    matching network_scan/ct_monitor's own trigger permission (cancelling
+    is the same tier of action as starting one)."""
+    if not has_permission(user.role_name.value, P_["discovery"]["network_scan"]) and not has_permission(
+        user.role_name.value, P_["discovery"]["ct_monitor"]
+    ):
+        raise PermissionDeniedError("You are not authorized to cancel discovery runs")
+    from app.models.job import DiscoveryRun
+    from app.services.discovery_service import cancel_run
+
+    run = db.query(DiscoveryRun).filter(DiscoveryRun.id == run_id).first()
+    if run is None:
+        raise NotFoundError("Run not found")
+    cancel_run(db, run)
+    record(db, action="discovery.run.cancel", user_id=user.id, username=user.username,
+          resource_type="discovery", resource_id=run_id, result=AuditResult.SUCCESS,
+          ip_address=get_client_ip(request), user_agent=get_user_agent(request))
+    return {"id": run.id, "status": run.status}
 
 
 @discovery_router.get("/ignored")
