@@ -90,6 +90,13 @@ class CertificateUsageResult(Base, IntPkMixin):
     presented_subject: Mapped[str | None] = mapped_column(String(512), nullable=True)
     presented_issuer: Mapped[str | None] = mapped_column(String(512), nullable=True)
     presented_serial: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    # Set only when status is "different_certificate" AND the presented
+    # fingerprint matches another certificate CertMgr already tracks — lets
+    # the UI say "actually serving Certificate #47 (*.otherapp.com)" instead
+    # of just raw subject/issuer text for an unrecognized cert.
+    presented_certificate_id: Mapped[int | None] = mapped_column(
+        ForeignKey("certificates.id", ondelete="SET NULL"), nullable=True
+    )
 
     not_before: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     not_after: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

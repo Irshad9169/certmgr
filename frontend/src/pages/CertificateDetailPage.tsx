@@ -77,6 +77,8 @@ interface UsageResult {
   presented_fingerprint: string | null
   presented_subject: string | null
   presented_issuer: string | null
+  presented_certificate_id: number | null
+  presented_certificate_domain: string | null
   discovery_source: string
   error_code: string | null
   error_message: string | null
@@ -653,6 +655,15 @@ export default function CertificateDetailPage() {
                         <TableCell>{r.port}</TableCell>
                         <TableCell>
                           <StatusChip value={r.status} />
+                          {r.status === 'different_certificate' && r.presented_certificate_id && (
+                            <Typography
+                              variant="caption" display="block" color="primary"
+                              sx={{ cursor: 'pointer', textDecoration: 'underline' }}
+                              onClick={() => navigate(`/certificates/${r.presented_certificate_id}`)}
+                            >
+                              Actually serving: {r.presented_certificate_domain} (#{r.presented_certificate_id})
+                            </Typography>
+                          )}
                           {r.error_message && (
                             <Typography variant="caption" color="text.secondary" display="block">
                               {r.error_message}

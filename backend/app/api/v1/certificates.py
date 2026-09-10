@@ -373,13 +373,28 @@ def certificate_executions(certificate_id: int, db: DbSession, user: CurrentUser
 
 
 # ── Wildcard certificate usage discovery ────────────────────────────────────
-def _serialize_usage_result(r) -> dict:
+def _presented_certificate_domains(db: DbSession, results: list) -> dict[int, str]:
+    """Batch-lookup {certificate_id: domain} for every non-null
+    presented_certificate_id in a page of results — one query, not N+1."""
+    ids = {r.presented_certificate_id for r in results if r.presented_certificate_id}
+    if not ids:
+        return {}
+    from app.models.certificate import Certificate
+
+    rows = db.query(Certificate.id, Certificate.domain).filter(Certificate.id.in_(ids)).all()
+    return dict(rows)
+
+
+def _serialize_usage_result(r, cert_domains: dict[int, str] | None = None) -> dict:
+    cert_domains = cert_domains or {}
     return {
         "id": r.id, "hostname": r.hostname, "ip_address": r.ip_address, "port": r.port,
         "protocol": r.protocol, "status": r.status,
         "expected_fingerprint": r.expected_fingerprint, "presented_fingerprint": r.presented_fingerprint,
         "presented_subject": r.presented_subject, "presented_issuer": r.presented_issuer,
         "presented_serial": r.presented_serial,
+        "presented_certificate_id": r.presented_certificate_id,
+        "presented_certificate_domain": cert_domains.get(r.presented_certificate_id),
         "not_before": r.not_before.isoformat() if r.not_before else None,
         "not_after": r.not_after.isoformat() if r.not_after else None,
         "discovery_source": r.discovery_source,
@@ -415,8 +430,9 @@ def certificate_usage(
         .limit(page_size)
         .all()
     )
+    cert_domains = _presented_certificate_domains(db, rows)
     return {
-        "items": [_serialize_usage_result(r) for r in rows],
+        "items": [_serialize_usage_result(r, cert_domains) for r in rows],
         "total": total, "page": page, "page_size": page_size,
         "pages": (total + page_size - 1) // page_size if page_size else 1,
         "summary": usage_summary(db, certificate_id),

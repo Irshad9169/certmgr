@@ -487,3 +487,38 @@ def test_start_scan_records_one_result_not_one_per_configured_port(db, tls_serve
     result = db.query(CertificateUsageResult).filter(CertificateUsageResult.certificate_id == cert.id).one()
     assert result.port == server.port
     assert result.status == "confirmed"
+
+
+def test_different_certificate_links_to_a_known_certificate(db, tls_server):
+    """When the endpoint's actual certificate is one CertMgr already tracks,
+    the result should point straight at it — not leave the analyst with only
+    raw, unattributed subject/issuer text."""
+    server, cert_pem = tls_server
+    _, meta = parse_certificate(cert_pem)
+    scanned_cert = _make_wildcard_cert(db, domain="*.example.com", fingerprint="00" * 32)
+    known_cert = Certificate(
+        domain="other.example.org", cert_name="other", sans=["other.example.org"],
+        cert_type=CertificateType.SINGLE.value, validation_method=ValidationMethod.HTTP_01.value,
+        fingerprint_sha256=meta.fingerprint_sha256,
+    )
+    db.add(known_cert)
+    db.commit()
+
+    start_scan(db, scanned_cert.id, sources=["manual"], hostnames=[f"127.0.0.1:{server.port}"])
+
+    result = db.query(CertificateUsageResult).filter(CertificateUsageResult.certificate_id == scanned_cert.id).one()
+    assert result.status == "different_certificate"
+    assert result.presented_certificate_id == known_cert.id
+
+
+def test_different_certificate_with_unrecognized_cert_has_no_link(db, tls_server):
+    server, cert_pem = tls_server
+    _, meta = parse_certificate(cert_pem)
+    assert meta  # sanity: real cert parsed, just never registered as a Certificate row
+    scanned_cert = _make_wildcard_cert(db, domain="*.example.com", fingerprint="00" * 32)
+
+    start_scan(db, scanned_cert.id, sources=["manual"], hostnames=[f"127.0.0.1:{server.port}"])
+
+    result = db.query(CertificateUsageResult).filter(CertificateUsageResult.certificate_id == scanned_cert.id).one()
+    assert result.status == "different_certificate"
+    assert result.presented_certificate_id is None

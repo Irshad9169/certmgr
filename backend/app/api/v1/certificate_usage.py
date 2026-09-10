@@ -53,7 +53,7 @@ def get_scan_results(
 ):
     if not has_permission(user.role_name.value, P_["cert"]["view"]):
         raise PermissionDeniedError("You are not authorized to view certificate usage scans")
-    from app.api.v1.certificates import _serialize_usage_result
+    from app.api.v1.certificates import _presented_certificate_domains, _serialize_usage_result
     from app.models.certificate_usage import CertificateUsageResult, CertificateUsageScan
 
     scan = db.query(CertificateUsageScan).filter(CertificateUsageScan.id == scan_id).first()
@@ -71,8 +71,9 @@ def get_scan_results(
         .limit(page_size)
         .all()
     )
+    cert_domains = _presented_certificate_domains(db, rows)
     return {
-        "items": [_serialize_usage_result(r) for r in rows],
+        "items": [_serialize_usage_result(r, cert_domains) for r in rows],
         "total": total, "page": page, "page_size": page_size,
         "pages": (total + page_size - 1) // page_size if page_size else 1,
     }

@@ -364,6 +364,15 @@ def _record_result(db: Session, scan: CertificateUsageScan, certificate: Certifi
     existing.error_message = probe.error_message
     existing.last_checked_at = now
     existing.scan_id = scan.id
+    existing.presented_certificate_id = None
+    if probe.status == CertUsageResultStatus.DIFFERENT_CERTIFICATE.value and probe.presented_fingerprint:
+        # The endpoint is serving some other certificate — if CertMgr
+        # already tracks it, link to it directly rather than leaving the
+        # analyst with only raw, unattributed subject/issuer text.
+        known = db.query(Certificate).filter(
+            Certificate.fingerprint_sha256 == probe.presented_fingerprint
+        ).first()
+        existing.presented_certificate_id = known.id if known else None
     if probe.status in (CertUsageResultStatus.CONFIRMED.value, CertUsageResultStatus.DIFFERENT_CERTIFICATE.value):
         existing.last_seen_at = now
     return probe.status
