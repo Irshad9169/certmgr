@@ -123,25 +123,52 @@ def _covered_by_single_label_wildcard(hostname: str, suffix: str) -> bool:
     return bool(remainder) and "." not in remainder
 
 
-def _candidate_hostnames_from_inventory(db: Session, suffix: str) -> set[str]:
+def _wildcard_suffixes(certificate: Certificate) -> list[str]:
+    """All distinct suffixes this certificate's wildcard SAN entries cover —
+    a certificate can carry more than one wildcard SAN (e.g. *.example.com
+    and *.corp.example.com together). Empty for a certificate with no
+    wildcard SAN at all (a pure multi-SAN certificate)."""
+    sans = certificate.sans or []
+    wildcard_sans = [s for s in sans if s.startswith("*.")]
+    if not wildcard_sans and certificate.domain.startswith("*."):
+        wildcard_sans = [certificate.domain]
+    return sorted({_wildcard_suffix(s) for s in wildcard_sans})
+
+
+def _literal_sans(certificate: Certificate) -> list[str]:
+    """Non-wildcard SAN entries. For a pure multi-SAN certificate these ARE
+    the complete, exact set of hostnames it was issued for — the same
+    "coverage isn't usage" question a wildcard raises, just enumerated
+    instead of pattern-matched. For a mixed wildcard+SAN certificate these
+    are the specific extra hostnames alongside the wildcard's broader (but
+    still single-label) coverage."""
+    return [s.strip().lower() for s in (certificate.sans or []) if s and not s.startswith("*.")]
+
+
+def _candidate_hostnames_from_inventory(db: Session, suffixes: list[str]) -> set[str]:
     """Reuse hostnames CertMgr already knows about: managed servers and
     domains from any certificate record (its own or others') that are
-    actually covered by this wildcard's single-label scope — e.g. if
-    *.example.com is selected, "api.example.com" already tracked as its own
-    certificate's domain is an obvious candidate, but "api.internal
-    .example.com" is not (a different, deeper wildcard would be needed to
-    cover that, so surfacing it here would be a false candidate the live
-    probe could never confirm)."""
+    actually covered by one of this certificate's wildcard suffixes'
+    single-label scope — e.g. if *.example.com is selected, "api.example.com"
+    already tracked as its own certificate's domain is an obvious candidate,
+    but "api.internal.example.com" is not (a different, deeper wildcard
+    would be needed to cover that, so surfacing it here would be a false
+    candidate the live probe could never confirm). Empty suffixes (a pure
+    multi-SAN certificate with no wildcard SAN) yields no candidates —
+    there's no pattern to discover more hostnames from; the "sans" source
+    already provides the certificate's own exact, finite hostname list."""
+    if not suffixes:
+        return set()
     candidates: set[str] = set()
 
     for (hostname,) in db.query(Server.hostname).all():
         h = (hostname or "").strip().lower()
-        if h and _covered_by_single_label_wildcard(h, suffix):
+        if h and any(_covered_by_single_label_wildcard(h, s) for s in suffixes):
             candidates.add(h)
 
     for (domain,) in db.query(CertificateDomain.domain).all():
         d = (domain or "").strip().lower()
-        if d and not d.startswith("*.") and _covered_by_single_label_wildcard(d, suffix):
+        if d and not d.startswith("*.") and any(_covered_by_single_label_wildcard(d, s) for s in suffixes):
             candidates.add(d)
 
     return candidates
@@ -279,16 +306,24 @@ def _record_result(db: Session, scan: CertificateUsageScan, certificate: Certifi
     return probe.status
 
 
-def get_wildcard_certificate(db: Session, certificate_id: int) -> Certificate:
+def get_usage_discovery_certificate(db: Session, certificate_id: int) -> Certificate:
     """Shared validation for both the eager and async trigger paths — the
     async path needs it BEFORE dispatch (to fail fast in the request instead
-    of creating a queued row for a certificate that was never eligible)."""
+    of creating a queued row for a certificate that was never eligible).
+
+    Eligible: wildcard certificates (the original case — "*.example.com"
+    covers a pattern, not a specific endpoint) and multi-SAN certificates
+    (the exact same "coverage isn't usage" ambiguity — a cert listing
+    api/portal/vpn.example.com as SANs doesn't tell you which of those are
+    actually still serving it). A single-domain, non-wildcard certificate
+    has exactly one possible hostname — there's no coverage-vs-usage
+    question left to answer, so it's excluded."""
     certificate = db.query(Certificate).filter(Certificate.id == certificate_id).first()
     if certificate is None:
         raise NotFoundError("Certificate not found")
-    if not certificate.is_wildcard:
+    if not certificate.is_wildcard and len(certificate.sans or []) <= 1:
         raise ValidationAppError(
-            "Usage discovery is only available for wildcard certificates in this release"
+            "Usage discovery is only available for wildcard or multi-domain (SAN) certificates in this release"
         )
     return certificate
 
@@ -307,11 +342,11 @@ def start_scan(
     creating a new one — lets the async API route hand the frontend a scan
     id to poll immediately at dispatch time, before the Celery task actually
     starts running."""
-    certificate = get_wildcard_certificate(db, certificate_id)
+    certificate = get_usage_discovery_certificate(db, certificate_id)
 
     from app.services.settings_service import get_setting
 
-    resolved_sources = sources or ["inventory", "manual"]
+    resolved_sources = sources or ["sans", "inventory", "manual"]
     raw_ports = ports or [
         int(p) for p in (get_setting(db, "cert_usage_scan.ports") or "443,8443,9443").split(",") if p.strip()
     ]
@@ -319,12 +354,15 @@ def start_scan(
     resolved_timeout = timeout or float(get_setting(db, "cert_usage_scan.timeout_seconds") or 5)
     resolved_concurrency = concurrency or int(get_setting(db, "cert_usage_scan.max_concurrency") or 25)
 
-    suffix = _wildcard_suffix(certificate.domain)
+    suffixes = _wildcard_suffixes(certificate)
 
     # (hostname, explicit_port_or_None, source)
     candidates: dict[str, tuple[str, int | None]] = {}
+    if "sans" in resolved_sources:
+        for h in _literal_sans(certificate):
+            candidates[h] = ("certificate_sans", None)
     if "inventory" in resolved_sources:
-        for h in _candidate_hostnames_from_inventory(db, suffix):
+        for h in _candidate_hostnames_from_inventory(db, suffixes):
             candidates[h] = ("inventory", None)
     if "manual" in resolved_sources and hostnames:
         for h, explicit_port in _parse_manual_hostnames(hostnames):

@@ -126,7 +126,7 @@ export default function CertificateDetailPage() {
   const [usageSearch, setUsageSearch] = useState('')
   const [usagePage, setUsagePage] = useState(1)
   const [scanDialogOpen, setScanDialogOpen] = useState(false)
-  const [scanSources, setScanSources] = useState({ inventory: true, manual: true })
+  const [scanSources, setScanSources] = useState({ sans: true, inventory: true, manual: true })
   const [scanHostnames, setScanHostnames] = useState('')
   const [scanPorts, setScanPorts] = useState<Record<number, boolean>>({ 443: true, 8443: true, 9443: true })
   const [scanTimeout, setScanTimeout] = useState(5)
@@ -257,6 +257,7 @@ export default function CertificateDetailPage() {
   if (cert.error || !cert.data) return <ErrorBox message="Certificate not found" onRetry={() => cert.refetch()} />
 
   const c = cert.data
+  const usageEligible = c.is_wildcard || (c.sans?.length ?? 0) > 1
 
   const InfoRow = ({ label, value, mono }: { label: string; value?: React.ReactNode; mono?: boolean }) => (
     <Box sx={{ py: 0.75 }}>
@@ -554,11 +555,13 @@ export default function CertificateDetailPage() {
         ))}
 
       {tab === 5 && (
-        !c.is_wildcard ? (
+        !usageEligible ? (
           <Alert severity="info">
-            Usage discovery is only available for wildcard certificates (e.g. <code>*.example.com</code>) —
-            it determines which real endpoints are actually presenting <b>this exact</b> certificate,
-            distinct from which hostnames the wildcard merely covers.
+            Usage discovery is only available for wildcard (e.g. <code>*.example.com</code>) or
+            multi-domain (SAN) certificates — it determines which real endpoints are actually
+            presenting <b>this exact</b> certificate, distinct from which hostnames the certificate
+            merely covers. A single-domain certificate has only one possible hostname, so there's
+            no coverage-vs-usage question to answer.
           </Alert>
         ) : (
           <Box>
@@ -681,6 +684,13 @@ export default function CertificateDetailPage() {
           </Typography>
           <Box>
             <Typography variant="subtitle2">Discovery sources</Typography>
+            {c.sans.length > 1 && (
+              <FormControlLabel
+                control={<Checkbox checked={scanSources.sans}
+                  onChange={(e) => setScanSources((s) => ({ ...s, sans: e.target.checked }))} />}
+                label={`This certificate's own SAN list (${c.sans.filter((s) => !s.startsWith('*.')).length})`}
+              />
+            )}
             <FormControlLabel
               control={<Checkbox checked={scanSources.inventory}
                 onChange={(e) => setScanSources((s) => ({ ...s, inventory: e.target.checked }))} />}

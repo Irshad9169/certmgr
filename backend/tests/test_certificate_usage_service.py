@@ -181,7 +181,8 @@ def test_probe_timeout_when_peer_never_completes_handshake():
         server.stop()
 
 
-def test_start_scan_rejects_non_wildcard_certificate(db):
+def test_start_scan_rejects_single_domain_certificate(db):
+    # Exactly one possible hostname — no coverage-vs-usage question to answer.
     cert = Certificate(domain="single.example.com", cert_name="single", sans=["single.example.com"],
                        cert_type=CertificateType.SINGLE.value, validation_method=ValidationMethod.HTTP_01.value,
                        is_wildcard=False)
@@ -190,6 +191,66 @@ def test_start_scan_rejects_non_wildcard_certificate(db):
 
     with pytest.raises(ValidationAppError):
         start_scan(db, cert.id, sources=["manual"], hostnames=["api.example.com"])
+
+
+def test_start_scan_accepts_multi_san_non_wildcard_certificate(db, tls_server):
+    # A non-wildcard certificate with several SANs has the exact same
+    # "coverage isn't usage" ambiguity as a wildcard — it must be eligible.
+    server, cert_pem = tls_server
+    _, meta = parse_certificate(cert_pem)
+    cert = Certificate(
+        domain="api.example.com", cert_name="multi-san",
+        sans=["api.example.com", "portal.example.com", "vpn.example.com"],
+        cert_type=CertificateType.MULTI.value, validation_method=ValidationMethod.HTTP_01.value,
+        is_wildcard=False, fingerprint_sha256=meta.fingerprint_sha256,
+    )
+    db.add(cert)
+    db.commit()
+
+    scan = start_scan(db, cert.id, sources=["manual"], hostnames=[f"127.0.0.1:{server.port}"])
+    assert scan.status == "completed"
+
+
+def test_sans_source_scans_the_certificates_own_san_list(db, tls_server):
+    server, cert_pem = tls_server
+    _, meta = parse_certificate(cert_pem)
+    cert = Certificate(
+        domain="api.example.com", cert_name="multi-san",
+        sans=["api.example.com", "portal.example.com"],
+        cert_type=CertificateType.MULTI.value, validation_method=ValidationMethod.HTTP_01.value,
+        is_wildcard=False, fingerprint_sha256=meta.fingerprint_sha256,
+    )
+    db.add(cert)
+    db.commit()
+
+    scan = start_scan(db, cert.id, sources=["sans"], ports=[server.port], timeout=0.5)
+
+    assert scan.candidate_count == 2  # both SANs, expanded across the one configured port
+    results = db.query(CertificateUsageResult).filter(CertificateUsageResult.certificate_id == cert.id).all()
+    assert {r.hostname for r in results} == {"api.example.com", "portal.example.com"}
+    assert all(r.discovery_source == "certificate_sans" for r in results)
+
+
+def test_sans_source_excludes_wildcard_entries_for_mixed_certificate(db, tls_server):
+    # A mixed wildcard+SAN certificate's "sans" source must only scan the
+    # literal extra hostname, not re-list the wildcard pattern itself as a
+    # literal (unresolvable) candidate.
+    server, cert_pem = tls_server
+    _, meta = parse_certificate(cert_pem)
+    cert = Certificate(
+        domain="*.example.com", cert_name="mixed",
+        sans=["*.example.com", "example.com"],
+        cert_type=CertificateType.WILDCARD.value, validation_method=ValidationMethod.HTTP_01.value,
+        is_wildcard=True, fingerprint_sha256=meta.fingerprint_sha256,
+    )
+    db.add(cert)
+    db.commit()
+
+    scan = start_scan(db, cert.id, sources=["sans"], ports=[server.port], timeout=0.5)
+
+    assert scan.candidate_count == 1
+    result = db.query(CertificateUsageResult).filter(CertificateUsageResult.certificate_id == cert.id).one()
+    assert result.hostname == "example.com"
 
 
 def test_start_scan_confirms_manual_hostname(db, tls_server):

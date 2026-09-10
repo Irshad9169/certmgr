@@ -379,6 +379,33 @@ without.
 
 ---
 
+## [1.6.1] — 2026-09-10 — Multi-SAN usage discovery + wildcard-depth fix
+
+### Added
+- Usage discovery now also covers **multi-SAN (non-wildcard) certificates**
+  — a certificate with several SANs (`api.example.com`, `portal.example.com`,
+  `vpn.example.com`) has the exact same "coverage isn't usage" ambiguity a
+  wildcard does. A new **"This certificate's own SAN list"** candidate
+  source scans a certificate's literal, non-wildcard SANs directly — the
+  complete set for a pure multi-SAN certificate, or the extra literal
+  hostnames alongside a mixed wildcard+SAN certificate's broader coverage.
+  Eligibility is now "wildcard OR more than one SAN," not "wildcard only" —
+  a single-domain certificate is still excluded, since it has exactly one
+  possible hostname.
+
+### Fixed
+- Inventory-sourced candidates for a wildcard certificate were matched with
+  a plain suffix check (`hostname.endswith(".example.com")`), which
+  incorrectly treated **any** subdomain depth as wildcard-covered — found
+  live against `*.magicjack.com`, which pulled in an unrelated two-level
+  subdomain. Per RFC 6125/X.509 wildcard matching, `*.example.com` covers
+  exactly one additional DNS label (`api.example.com`), never
+  `a.b.example.com`. Manual hostname entry is unaffected — typing in a
+  specific hostname is explicit intent, not something this code should
+  second-guess.
+
+---
+
 ## [Unreleased] — Planned
 
 - SSO: LDAP/AD, OpenID Connect, OAuth2, SAML (settings scaffolding exists).

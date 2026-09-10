@@ -427,14 +427,14 @@ def certificate_usage(
 def trigger_usage_scan(certificate_id: int, db: DbSession, user: CurrentUser, request: Request,
                        body: dict[str, Any] | None = None):
     if not has_permission(user.role_name.value, Perm["usage_scan"]):
-        raise PermissionDeniedError("You are not authorized to run wildcard certificate usage scans")
+        raise PermissionDeniedError("You are not authorized to run certificate usage scans")
     body = body or {}
     sources = body.get("sources")
     hostnames = body.get("hostnames")
     ports = body.get("ports")
     timeout = body.get("timeout")
 
-    from app.services.certificate_usage_service import get_wildcard_certificate, start_scan
+    from app.services.certificate_usage_service import get_usage_discovery_certificate, start_scan
 
     if settings.celery_task_always_eager:
         scan = start_scan(db, certificate_id, sources=sources, hostnames=hostnames, ports=ports,
@@ -446,11 +446,11 @@ def trigger_usage_scan(certificate_id: int, db: DbSession, user: CurrentUser, re
     # frontend gets a scan_id to poll immediately, before a worker has even
     # picked the task up — matches the "Certificate Usage Scan #184 RUNNING"
     # live-progress UI, which a bare {"status": "queued"} can't support.
-    get_wildcard_certificate(db, certificate_id)
+    get_usage_discovery_certificate(db, certificate_id)
     from app.models.certificate_usage import CertificateUsageScan
     from app.tasks.discovery import run_certificate_usage_scan as run_usage_scan_task
 
-    pre = CertificateUsageScan(certificate_id=certificate_id, sources=sources or ["inventory", "manual"],
+    pre = CertificateUsageScan(certificate_id=certificate_id, sources=sources or ["sans", "inventory", "manual"],
                                created_by=user.id)
     db.add(pre)
     db.commit()

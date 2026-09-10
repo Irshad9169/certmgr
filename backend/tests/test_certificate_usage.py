@@ -6,9 +6,11 @@ from app.services.certificate_usage_service import (
     _candidate_hostnames_from_inventory,
     _covered_by_single_label_wildcard,
     _is_ip_literal,
+    _literal_sans,
     _normalize_fingerprint,
     _parse_manual_hostnames,
     _wildcard_suffix,
+    _wildcard_suffixes,
 )
 
 
@@ -111,5 +113,51 @@ def test_candidate_hostnames_from_inventory_filters_by_suffix(db):
     db.add(CertificateDomain(certificate_id=wildcard_cert.id, domain="*.example.com", is_primary=True))
     db.commit()
 
-    candidates = _candidate_hostnames_from_inventory(db, "example.com")
+    candidates = _candidate_hostnames_from_inventory(db, ["example.com"])
     assert candidates == {"api.example.com", "portal.example.com"}
+
+
+def test_candidate_hostnames_from_inventory_empty_suffixes_yields_nothing(db):
+    # A pure multi-SAN certificate has no wildcard suffix to discover more
+    # candidates from — its own SAN list (the "sans" source) already gives
+    # the complete, exact set of hostnames to check.
+    from app.models.server import Server
+
+    db.add(Server(hostname="api.example.com", environment="production"))
+    db.commit()
+
+    assert _candidate_hostnames_from_inventory(db, []) == set()
+
+
+def _cert(domain, sans, is_wildcard=False):
+    from app.models.certificate import Certificate
+    from app.models.enums import CertificateType, ValidationMethod
+
+    return Certificate(domain=domain, cert_name=domain, sans=sans,
+                       cert_type=CertificateType.WILDCARD.value if is_wildcard else CertificateType.MULTI.value,
+                       validation_method=ValidationMethod.HTTP_01.value, is_wildcard=is_wildcard)
+
+
+def test_wildcard_suffixes_from_single_wildcard_san():
+    cert = _cert("*.example.com", ["*.example.com"], is_wildcard=True)
+    assert _wildcard_suffixes(cert) == ["example.com"]
+
+
+def test_wildcard_suffixes_from_multiple_wildcard_sans():
+    cert = _cert("*.example.com", ["*.example.com", "*.corp.example.com"], is_wildcard=True)
+    assert _wildcard_suffixes(cert) == ["corp.example.com", "example.com"]
+
+
+def test_wildcard_suffixes_empty_for_pure_multi_san_certificate():
+    cert = _cert("api.example.com", ["api.example.com", "portal.example.com", "vpn.example.com"])
+    assert _wildcard_suffixes(cert) == []
+
+
+def test_literal_sans_excludes_wildcard_entries():
+    cert = _cert("*.example.com", ["*.example.com", "example.com"], is_wildcard=True)
+    assert _literal_sans(cert) == ["example.com"]
+
+
+def test_literal_sans_returns_full_list_for_multi_san_certificate():
+    cert = _cert("api.example.com", ["api.example.com", "portal.example.com", "vpn.example.com"])
+    assert _literal_sans(cert) == ["api.example.com", "portal.example.com", "vpn.example.com"]

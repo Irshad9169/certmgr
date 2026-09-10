@@ -224,34 +224,47 @@ appear in a search for `example.com`, so it genuinely doesn't fit this
 ingestion method. Real lookalike detection needs a different technique
 (generate permutations, query crt.sh for each one) — a separate feature.
 
-### Wildcard certificate usage discovery
+### Wildcard / multi-SAN certificate usage discovery
 
 Answers a different question from both the network scanner and CT
-monitoring: given a specific **wildcard** certificate already in CertMgr
-(e.g. `*.example.com`), which real endpoints are *actually presenting that
-exact certificate* right now? This distinction matters —
+monitoring: given a specific **wildcard or multi-domain (SAN)** certificate
+already in CertMgr (e.g. `*.example.com`, or one with SANs
+`api.example.com`/`portal.example.com`/`vpn.example.com`), which real
+endpoints are *actually presenting that exact certificate* right now? A
+single-domain, non-wildcard certificate is excluded — with exactly one
+possible hostname, there's no coverage-vs-usage question left to answer.
+This distinction matters for both wildcard and multi-SAN certificates alike —
 
 ```
 Certificate covers hostname   ≠   Endpoint is using certificate
 ```
 
-`api.example.com` falling under `*.example.com`'s coverage is only ever a
-*candidate* signal. The only authoritative result comes from a live TLS/SNI
-handshake against the candidate, comparing the presented certificate's
-SHA-256 fingerprint against the selected certificate's fingerprint — an
-exact match is `confirmed`, anything else served at that endpoint is
+`api.example.com` falling under `*.example.com`'s coverage, or being listed
+as one of several SANs, is only ever a *candidate* signal. The only
+authoritative result comes from a live TLS/SNI handshake against the
+candidate, comparing the presented certificate's SHA-256 fingerprint
+against the selected certificate's fingerprint — an exact match is
+`confirmed`, anything else served at that endpoint is
 `different_certificate`. Certificate verification is deliberately disabled
 for the probe itself (it's asking "what did you present", not "is it
 trusted") — this has no effect on any other certificate validation
 elsewhere in CertMgr.
 
-Candidate hostnames come from two sources (a per-scan checkbox each):
-**Existing CertMgr inventory** (managed servers' hostnames, plus any
-certificate's tracked domains, under the same wildcard suffix) and
-**Manual hostnames** (one per line, optionally `host:port`). There is no
-DNS-based *candidate enumeration* source — DNS *resolution* of each
-candidate is always performed regardless of source, but the codebase has no
-DNS integration for discovering hostnames it doesn't already know about.
+Candidate hostnames come from three sources (a per-scan checkbox each):
+**This certificate's own SAN list** (its literal, non-wildcard SAN entries —
+for a pure multi-SAN certificate this is the complete, exact hostname set;
+for a mixed wildcard+SAN certificate, the extra literal hostnames alongside
+the wildcard's coverage), **Existing CertMgr inventory** (managed servers'
+hostnames, plus any certificate's tracked domains, that fall under one of
+the certificate's wildcard SANs), and **Manual hostnames** (one per line,
+optionally `host:port`). Wildcard coverage is computed correctly per RFC
+6125/X.509 rules — `*.example.com` covers exactly one additional DNS label
+(`api.example.com`), not arbitrary depth (`a.b.example.com` is NOT covered,
+and is deliberately excluded from inventory-sourced candidates — a plain
+suffix check would wrongly include it). There is no DNS-based *candidate
+enumeration* source — DNS *resolution* of each candidate is always
+performed regardless of source, but the codebase has no DNS integration for
+discovering hostnames it doesn't already know about.
 
 Every result is one of:
 
@@ -268,8 +281,9 @@ Configure via Settings: `cert_usage_scan.ports` (default `443,8443,9443`),
 `cert_usage_scan.timeout_seconds` (default `5`),
 `cert_usage_scan.max_concurrency` (default `25`, bounded — this never scans
 arbitrary IP ranges, only known/supplied hostnames). Trigger from a
-certificate's **Usage Discovery** tab (wildcard certificates only —
-non-wildcard certificates show an explanatory message instead), gated on
+certificate's **Usage Discovery** tab (wildcard or multi-SAN certificates
+only — a single-domain certificate shows an explanatory message instead),
+gated on
 `certificate:usage_scan` (admin + certificate manager, the same tier as
 renew/revoke — lower than network_scan/ct_monitor's admin-only bar, since
 this only probes known/supplied hostnames, never arbitrary ranges). Runs
