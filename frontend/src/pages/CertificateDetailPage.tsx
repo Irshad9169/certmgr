@@ -126,7 +126,7 @@ export default function CertificateDetailPage() {
   const [usageSearch, setUsageSearch] = useState('')
   const [usagePage, setUsagePage] = useState(1)
   const [scanDialogOpen, setScanDialogOpen] = useState(false)
-  const [scanSources, setScanSources] = useState({ sans: true, inventory: true, manual: true })
+  const [scanSources, setScanSources] = useState({ sans: true, inventory: true, network_sightings: true, manual: true })
   const [scanHostnames, setScanHostnames] = useState('')
   const [scanPorts, setScanPorts] = useState<Record<number, boolean>>({ 443: true, 8443: true, 9443: true })
   const [scanTimeout, setScanTimeout] = useState(5)
@@ -568,7 +568,9 @@ export default function CertificateDetailPage() {
             <Card sx={{ mb: 2 }}>
               <CardContent>
                 <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
-                  <Typography variant="h6">Wildcard certificate usage</Typography>
+                  <Typography variant="h6">
+                    {c.is_wildcard ? 'Wildcard certificate usage' : 'Multi-domain (SAN) certificate usage'}
+                  </Typography>
                   {can('certificate:usage_scan') && (
                     <Button variant="contained" onClick={() => setScanDialogOpen(true)} disabled={activeScanId !== null}>
                       Scan Now
@@ -695,6 +697,11 @@ export default function CertificateDetailPage() {
               control={<Checkbox checked={scanSources.inventory}
                 onChange={(e) => setScanSources((s) => ({ ...s, inventory: e.target.checked }))} />}
               label="Existing CertMgr inventory"
+            />
+            <FormControlLabel
+              control={<Checkbox checked={scanSources.network_sightings}
+                onChange={(e) => setScanSources((s) => ({ ...s, network_sightings: e.target.checked }))} />}
+              label="Previously seen via network scan"
             />
             <FormControlLabel
               control={<Checkbox checked={scanSources.manual}

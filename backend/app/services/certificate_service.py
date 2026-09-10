@@ -974,6 +974,12 @@ def _bulk_execute(db, action: str, cert_id: int, user, options: dict) -> None:
                            template_id=template_id, user=user)
     elif action == "delete":
         delete_certificate(db, cert_id, user=user)
+    elif action == "usage_scan":
+        from app.services.certificate_usage_service import start_scan
+
+        start_scan(db, cert_id, sources=options.get("sources"), hostnames=options.get("hostnames"),
+                  ports=options.get("ports"), timeout=options.get("timeout"),
+                  created_by=user.id if user else None)
     else:
         raise ValidationAppError(f"Unsupported bulk action: {action}")
 

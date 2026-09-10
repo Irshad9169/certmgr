@@ -174,6 +174,26 @@ def _candidate_hostnames_from_inventory(db: Session, suffixes: list[str]) -> set
     return candidates
 
 
+def _candidate_targets_from_network_sightings(db: Session, certificate_id: int) -> list[tuple[str, int]]:
+    """Hosts the network scanner has ALREADY confirmed serving this exact
+    certificate (NetworkCertificateSighting.certificate_id == this
+    certificate), each at the specific port it was actually observed on —
+    not expanded across the configured port list, since the real port is
+    already known from that earlier scan. This is the highest-confidence
+    candidate source: it isn't "might be covered," it's "was physically
+    seen serving this fingerprint," independently confirmed by a different
+    discovery mechanism."""
+    from app.models.job import NetworkCertificateSighting
+
+    rows = (
+        db.query(NetworkCertificateSighting.host, NetworkCertificateSighting.port)
+        .filter(NetworkCertificateSighting.certificate_id == certificate_id)
+        .distinct()
+        .all()
+    )
+    return [(h.strip().lower(), p) for h, p in rows if h]
+
+
 @dataclass
 class _ProbeResult:
     status: str
@@ -346,7 +366,7 @@ def start_scan(
 
     from app.services.settings_service import get_setting
 
-    resolved_sources = sources or ["sans", "inventory", "manual"]
+    resolved_sources = sources or ["sans", "inventory", "network_sightings", "manual"]
     raw_ports = ports or [
         int(p) for p in (get_setting(db, "cert_usage_scan.ports") or "443,8443,9443").split(",") if p.strip()
     ]
@@ -356,24 +376,30 @@ def start_scan(
 
     suffixes = _wildcard_suffixes(certificate)
 
-    # (hostname, explicit_port_or_None, source)
-    candidates: dict[str, tuple[str, int | None]] = {}
-    if "sans" in resolved_sources:
-        for h in _literal_sans(certificate):
-            candidates[h] = ("certificate_sans", None)
+    # Keyed on (hostname, port) — NOT hostname alone — so a host proposed by
+    # two sources with different ports keeps both, instead of one silently
+    # overwriting the other. Sources are applied in ascending order of
+    # confidence: a network sighting is a *physically observed* fact, so it
+    # takes precedence over a same-endpoint guess from a lower-confidence
+    # source if both happen to name the same (hostname, port).
+    target_source: dict[tuple[str, int], str] = {}
     if "inventory" in resolved_sources:
         for h in _candidate_hostnames_from_inventory(db, suffixes):
-            candidates[h] = ("inventory", None)
+            for port in resolved_ports:
+                target_source[(h, port)] = "inventory"
+    if "sans" in resolved_sources:
+        for h in _literal_sans(certificate):
+            for port in resolved_ports:
+                target_source[(h, port)] = "certificate_sans"
     if "manual" in resolved_sources and hostnames:
         for h, explicit_port in _parse_manual_hostnames(hostnames):
-            candidates[h] = ("manual", explicit_port)
+            for port in ([explicit_port] if explicit_port else resolved_ports):
+                target_source[(h, port)] = "manual"
+    if "network_sightings" in resolved_sources:
+        for h, p in _candidate_targets_from_network_sightings(db, certificate.id):
+            target_source[(h, p)] = "network_sighting"
 
-    # Expand each candidate hostname across the configured ports, unless the
-    # candidate itself specified one explicitly (manual "host:port" form).
-    targets: list[tuple[str, int, str]] = []
-    for hostname, (source, explicit_port) in candidates.items():
-        for port in ([explicit_port] if explicit_port else resolved_ports):
-            targets.append((hostname, port, source))
+    targets: list[tuple[str, int, str]] = [(h, p, source) for (h, p), source in target_source.items()]
 
     scan = db.get(CertificateUsageScan, scan_id) if scan_id is not None else None
     if scan is None:

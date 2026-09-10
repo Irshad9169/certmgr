@@ -31,6 +31,7 @@ import BlockIcon from '@mui/icons-material/Block'
 import StarIcon from '@mui/icons-material/Star'
 import StarBorderIcon from '@mui/icons-material/StarBorder'
 import DeleteForeverIcon from '@mui/icons-material/DeleteForever'
+import TravelExploreIcon from '@mui/icons-material/TravelExplore'
 import { api, apiErrorMessage } from '../lib/api'
 import type { Certificate, Page } from '../types'
 import { ConfirmDialog, EmptyState, ErrorBox, Loading, PageHeader, StatusChip, Toast, daysColor } from '../components/Shared'
@@ -78,7 +79,7 @@ export default function CertificatesPage() {
     search: '', status: '', environment: '', provider: '', key_type: '', auto_renew: '',
   })
   const [selected, setSelected] = useState<number[]>([])
-  const [bulkAction, setBulkAction] = useState<null | 'renew' | 'revoke' | 'delete'>(null)
+  const [bulkAction, setBulkAction] = useState<null | 'renew' | 'revoke' | 'delete' | 'usage_scan'>(null)
   const [toast, setToast] = useState<{ message: string; severity: 'success' | 'error' } | null>(null)
 
   const params = useMemo(() => ({
@@ -97,7 +98,7 @@ export default function CertificatesPage() {
   })
 
   const bulkMutation = useMutation({
-    mutationFn: (action: 'renew' | 'revoke' | 'delete') =>
+    mutationFn: (action: 'renew' | 'revoke' | 'delete' | 'usage_scan') =>
       api.post<{ queued: number; failed: number }>('/certificates/bulk', {
         action, ids: selected, options: action === 'revoke' ? { reason: 'superseded' } : {},
       }),
@@ -161,6 +162,11 @@ export default function CertificatesPage() {
             {can('certificate:delete') && selected.length > 0 && (
               <Button color="error" startIcon={<DeleteForeverIcon />} onClick={() => setBulkAction('delete')}>
                 Delete ({selected.length})
+              </Button>
+            )}
+            {can('certificate:bulk') && can('certificate:usage_scan') && selected.length > 0 && (
+              <Button startIcon={<TravelExploreIcon />} onClick={() => setBulkAction('usage_scan')}>
+                Usage Scan ({selected.length})
               </Button>
             )}
             <Button startIcon={<RefreshIcon />} onClick={() => refetch()} disabled={isFetching}>
@@ -398,6 +404,14 @@ export default function CertificatesPage() {
         confirmLabel="Delete"
         danger
         onConfirm={() => bulkMutation.mutate('delete')}
+        onClose={() => setBulkAction(null)}
+      />
+      <ConfirmDialog
+        open={bulkAction === 'usage_scan'}
+        title={`Run usage discovery for ${selected.length} certificate(s)?`}
+        body="Scans each selected certificate's own SAN list, matching CertMgr inventory, and previously-confirmed network scan sightings for endpoints presenting that exact certificate. Only wildcard or multi-domain (SAN) certificates are eligible — any single-domain certificate in the selection is skipped and reported as failed. Review each certificate's own Usage Discovery tab for full results, or to add manual hostnames."
+        confirmLabel="Run Scan"
+        onConfirm={() => bulkMutation.mutate('usage_scan')}
         onClose={() => setBulkAction(null)}
       />
       <Toast toast={toast} onClose={() => setToast(null)} />

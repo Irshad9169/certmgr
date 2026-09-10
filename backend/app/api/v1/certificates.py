@@ -316,7 +316,7 @@ def bulk_actions(
     action = body.get("action")
     ids = body.get("ids", [])
     options = body.get("options") or {}
-    if action not in {"renew", "revoke", "deploy", "issue", "delete"}:
+    if action not in {"renew", "revoke", "deploy", "issue", "delete", "usage_scan"}:
         raise ValidationAppError(f"Unsupported bulk action: {action}")
     if not isinstance(ids, list) or not ids or len(ids) > 500:
         raise ValidationAppError("ids must be a non-empty list (max 500)")
@@ -450,7 +450,8 @@ def trigger_usage_scan(certificate_id: int, db: DbSession, user: CurrentUser, re
     from app.models.certificate_usage import CertificateUsageScan
     from app.tasks.discovery import run_certificate_usage_scan as run_usage_scan_task
 
-    pre = CertificateUsageScan(certificate_id=certificate_id, sources=sources or ["sans", "inventory", "manual"],
+    pre = CertificateUsageScan(certificate_id=certificate_id,
+                               sources=sources or ["sans", "inventory", "network_sightings", "manual"],
                                created_by=user.id)
     db.add(pre)
     db.commit()

@@ -304,3 +304,78 @@ def test_manual_and_inventory_candidates_are_deduplicated(db, tls_server):
 
     # "api.example.com" appears in both sources but must only be scanned once per port.
     assert scan.candidate_count == 1
+
+
+def test_network_sightings_source_scans_the_exact_previously_observed_port(db, tls_server):
+    from app.models.job import NetworkCertificateSighting
+
+    server, cert_pem = tls_server
+    _, meta = parse_certificate(cert_pem)
+    cert = _make_wildcard_cert(db, fingerprint=meta.fingerprint_sha256)
+    db.add(NetworkCertificateSighting(
+        fingerprint_sha256=meta.fingerprint_sha256, certificate_id=cert.id,
+        host="store.example.com", port=server.port,
+    ))
+    db.commit()
+
+    # Deliberately configure a DIFFERENT default port list — the sighting's
+    # own port must still be used, not silently replaced by it.
+    scan = start_scan(db, cert.id, sources=["network_sightings"], ports=[9443], timeout=0.5)
+
+    assert scan.candidate_count == 1
+    result = db.query(CertificateUsageResult).filter(CertificateUsageResult.certificate_id == cert.id).one()
+    assert result.hostname == "store.example.com"
+    assert result.port == server.port
+    assert result.discovery_source == "network_sighting"
+
+
+def test_same_hostname_different_ports_from_different_sources_both_scanned(db, tls_server):
+    """Regression: candidates used to be keyed by hostname alone, so a host
+    proposed by two sources with different ports would silently collapse to
+    just one of them. Keying by (hostname, port) instead means both survive."""
+    from app.models.job import NetworkCertificateSighting
+
+    server, cert_pem = tls_server
+    _, meta = parse_certificate(cert_pem)
+    cert = _make_wildcard_cert(db, fingerprint=meta.fingerprint_sha256)
+    # Same hostname as the manual entry below, but a DIFFERENT port via the
+    # network-sightings source.
+    db.add(NetworkCertificateSighting(
+        fingerprint_sha256=meta.fingerprint_sha256, certificate_id=cert.id,
+        host="shared.example.com", port=9443,
+    ))
+    db.commit()
+
+    scan = start_scan(db, cert.id, sources=["manual", "network_sightings"],
+                      hostnames=[f"shared.example.com:{server.port}"], timeout=0.5)
+
+    assert scan.candidate_count == 2
+    results = db.query(CertificateUsageResult).filter(CertificateUsageResult.certificate_id == cert.id).all()
+    ports = {r.port for r in results}
+    assert ports == {server.port, 9443}
+
+
+def test_bulk_usage_scan_runs_eligible_certificates_and_reports_ineligible_as_failed(db, tls_server):
+    """The bulk-select "Usage Scan" action (CertificatesPage) reuses the
+    existing generic bulk_action() dispatcher — one certificate failing
+    eligibility must not stop the others in the same batch, matching every
+    other bulk action's per-item failure tolerance (e.g. bulk delete
+    skipping non-deletable certificates)."""
+    from app.models.certificate_usage import CertificateUsageScan
+    from app.services.certificate_service import bulk_action
+
+    server, cert_pem = tls_server
+    _, meta = parse_certificate(cert_pem)
+    eligible = _make_wildcard_cert(db, fingerprint=meta.fingerprint_sha256)
+    ineligible = Certificate(domain="single.example.com", cert_name="single", sans=["single.example.com"],
+                             cert_type=CertificateType.SINGLE.value, validation_method=ValidationMethod.HTTP_01.value,
+                             is_wildcard=False)
+    db.add(ineligible)
+    db.commit()
+
+    result = bulk_action(db, action="usage_scan", ids=[eligible.id, ineligible.id],
+                         options={"sources": ["manual"], "hostnames": [f"127.0.0.1:{server.port}"], "timeout": 0.5})
+
+    assert result == {"queued": 1, "failed": 1}
+    assert db.query(CertificateUsageScan).filter(CertificateUsageScan.certificate_id == eligible.id).count() == 1
+    assert db.query(CertificateUsageScan).filter(CertificateUsageScan.certificate_id == ineligible.id).count() == 0

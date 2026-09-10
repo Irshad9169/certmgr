@@ -274,3 +274,42 @@ def test_read_only_cannot_use_ai_assistant(client, role_headers_factory):
 def test_admin_can_use_ai_assistant(client, admin_headers):
     resp = client.get("/api/v1/ai/recurring-failures", headers=admin_headers)
     assert resp.status_code == 200
+
+
+def test_operator_cannot_bulk_usage_scan(client, role_headers_factory):
+    """OPERATOR lacks certificate:bulk entirely, regardless of usage_scan."""
+    headers = role_headers_factory("op_bulk_usage", "operator")
+    resp = client.post("/api/v1/certificates/bulk", headers=headers,
+                       json={"action": "usage_scan", "ids": [999999]})
+    assert resp.status_code == 403
+
+
+def test_read_only_cannot_bulk_usage_scan(client, role_headers_factory):
+    headers = role_headers_factory("ro_bulk_usage", "read_only")
+    resp = client.post("/api/v1/certificates/bulk", headers=headers,
+                       json={"action": "usage_scan", "ids": [999999]})
+    assert resp.status_code == 403
+
+
+def test_cert_manager_can_bulk_usage_scan(client, role_headers_factory):
+    from conftest import SessionLocal
+
+    from app.models.certificate import Certificate
+    from app.models.enums import CertificateType, ValidationMethod
+
+    db = SessionLocal()
+    try:
+        cert = Certificate(domain="*.rbac-bulk-usage.example.com", cert_name="rbac-bulk-usage",
+                           sans=["*.rbac-bulk-usage.example.com"], cert_type=CertificateType.WILDCARD.value,
+                           validation_method=ValidationMethod.HTTP_01.value, is_wildcard=True)
+        db.add(cert)
+        db.commit()
+        cert_id = cert.id
+    finally:
+        db.close()
+
+    headers = role_headers_factory("cm_bulk_usage", "certificate_manager")
+    resp = client.post("/api/v1/certificates/bulk", headers=headers,
+                       json={"action": "usage_scan", "ids": [cert_id], "options": {"sources": ["manual"]}})
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["queued"] == 1
