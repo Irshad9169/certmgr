@@ -22,13 +22,30 @@
 
 ## Certificate details
 
-Tabs: **Overview** (subject, issuer, SANs, fingerprint, serial, validity, key
-algorithm/size, health score), **Execution history** (every issue/renew/revoke run
-with stdout/stderr/exit code/duration), **Deployments**, **Health checks**.
+Subject, issuer, SANs, fingerprint, serial, validity, key algorithm/size, and
+health score are shown above the tabs. Tabs: **Execution history** (every
+issue/renew/revoke run with stdout/stderr/exit code/duration),
+**Deployments**, **Downloads** (PEM/key/chain/fullchain/PFX/zip — key
+downloads restricted to authorized roles and audited), **Seen on network**
+(hosts the network scanner has found this certificate's fingerprint served
+at), **CT Findings** (Certificate Transparency findings for this
+certificate's domains), **Usage Discovery** (wildcard/multi-SAN certificates
+only — see below).
 
-Actions: Renew, Revoke (with reason), Deploy, Clone, Export (PEM/key/chain/
-fullchain/PFX/zip — key downloads restricted to authorized roles and audited),
-Backup.
+Actions: Renew, Revoke (with reason), Deploy, Clone, Delete, Backup.
+
+### Usage Discovery
+
+For a wildcard (`*.example.com`) or multi-domain (SAN) certificate, this tab
+answers "which real endpoints are actually presenting *this exact*
+certificate right now" — distinct from which hostnames it merely covers.
+Click **Scan Now**, choose candidate sources (the certificate's own SAN
+list, existing CertMgr inventory, previously-seen network scan sightings,
+and/or manual hostnames), and watch live progress. Results default to the
+`confirmed` filter; a `different_certificate` result links to the actual
+certificate being served there if CertMgr already tracks it. Also available
+in bulk from the Certificates list page (select multiple, click **Usage
+Scan**).
 
 ## Import an existing certificate
 
@@ -54,10 +71,30 @@ Everything is audited.
 
 ## Discovery
 
-Discovery scans configured paths (`/etc/letsencrypt/live`, `/etc/pki/tls/certs`,
-`/etc/nginx`, custom), parses found cert/key/PFX files, deduplicates by fingerprint
-and imports new certificates. Run manually from Discovery page or rely on the daily
-schedule.
+Three independent discovery mechanisms, all from the Discovery page:
+
+- **Filesystem scan** — scans configured paths (`/etc/letsencrypt/live`,
+  `/etc/pki/tls/certs`, `/etc/nginx`, custom), parses found cert/key/PFX
+  files, deduplicates by fingerprint, and imports new certificates. Run
+  manually or rely on the daily schedule.
+- **Network scan** — connects to given IP/CIDR/hostname targets over TLS and
+  records whatever certificate each one actually presents, trusted or not —
+  answers "what's reachable," including self-signed or internal-CA
+  certificates nobody registered with CertMgr. Admin-only (touches
+  infrastructure outside CertMgr's control). Manual trigger or the weekly
+  schedule against admin-configured targets.
+- **CT monitoring** — queries crt.sh (free, public, no API key) for
+  admin-configured domains and surfaces certificates issued for them,
+  including ones never deployed anywhere — answers "what's been *issued*,"
+  a different question from what's reachable. Findings (a real
+  open→acknowledged/resolved lifecycle, not just a log) show on the
+  Findings page and each certificate's CT Findings tab. Admin-only trigger;
+  daily schedule once `ct_monitoring.domains` is configured.
+
+See `docs/administration.md` for configuration details on all three, plus
+**Usage Discovery** (a related but separate feature — see Certificate
+details above), which answers yet another question: not "what's out there"
+but "is *this specific* certificate actually the one being served."
 
 ## Notifications
 

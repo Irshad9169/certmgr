@@ -61,7 +61,8 @@ management platform:
 | **Lifecycle** | Renew (manual + automatic), revoke (with reason + cleanup), clone, import (PEM/CRT/CER/PFX with auto metadata extraction), bulk renew/revoke/deploy, favorites, tags, ownership |
 | **Deployment** | SSH / SCP / SFTP / rsync to remote servers; templates for Nginx, Apache, HAProxy, OpenVPN, Tomcat, Jetty, NodeJS, IIS, PKCS12, custom; pre/post-deploy hooks; **automatic rollback** on failure; TLS verification after deploy |
 | **Servers** | Inventory (hostname, IP, env, OS, SSH auth, cert dir, web server, owner, tags), connectivity testing, **restricted remote command center** (allowlist), service control (status/restart/reload/stop/start) |
-| **Discovery** | Scheduled scans of `/etc/letsencrypt`, `/etc/pki`, `/etc/nginx`, custom paths; auto-parse and import certificates |
+| **Discovery** | Scheduled filesystem scans (`/etc/letsencrypt`, `/etc/pki`, `/etc/nginx`, custom paths; auto-parse and import); network TLS scanning (IP/CIDR/hostname targets, any live endpoint's presented certificate); Certificate Transparency monitoring (crt.sh, no API key) surfacing mis-issued/unexpected certificates as a lifecycle "Finding" |
+| **Usage discovery** | For a wildcard or multi-domain (SAN) certificate, an exact SHA-256 fingerprint match over a live TLS/SNI handshake confirms which real endpoints are *actually serving it* — distinct from which hostnames it merely covers (`confirmed` / `different_certificate` / `unreachable` / `dns_failed` / `tls_failed` / `timeout`); candidates from the certificate's own SAN list, CertMgr inventory, prior network-scan sightings, or manual entry; single-certificate or bulk trigger |
 | **Monitoring** | Health scores (expiry, signature, key size, TLS handshake), compliance engine (key length, curves, SHA, lifetime, duplicates, unused) |
 | **Notifications** | SMTP, Slack, Microsoft Teams, generic signed webhooks; expiry thresholds 60/30/15/7/3/1 days + lifecycle events (issued, renewed, failed, deployed, revoked, imported) |
 | **Webhooks (outbound)** | HMAC-SHA256 signed; events for issue/renew/expire/revoke/import/deploy; delivery history |
@@ -402,11 +403,13 @@ Common codes: `UNAUTHORIZED`, `FORBIDDEN`, `VALIDATION_ERROR`, `NOT_FOUND`,
 | Resource | Paths |
 |---|---|
 | Auth | `/auth/login`, `/auth/refresh`, `/auth/logout`, `/auth/me`, `/auth/change-password`, `/auth/mfa/*`, `/auth/tokens` |
-| Certificates | `/certificates` (list/CRUD), `/certificates/issue`, `/{id}/renew|revoke|clone`, `/import/upload|paths`, `/bulk`, `/{id}/download/{fmt}`, `/{id}/executions`, `/wizard/validate/*` |
+| Certificates | `/certificates` (list/CRUD), `/certificates/issue`, `/{id}/renew|revoke|clone`, `/import/upload|paths`, `/bulk` (incl. `usage_scan` action), `/{id}/download/{fmt}`, `/{id}/executions`, `/{id}/usage`, `/{id}/usage/scan`, `/wizard/validate/*` |
+| Certificate usage scans | `/certificate-usage/scans/{id}`, `/certificate-usage/scans/{id}/results` |
 | Servers | `/servers`, `/{id}/test`, `/{id}/command`, `/{id}/service/{svc}/{action}` |
 | Deployments | `/deployments`, `/{id}/rollback`, `/deployments/templates` |
 | Hooks | `/hooks` |
-| Discovery | `/discovery/run`, `/discovery/runs` |
+| Discovery | `/discovery/run` (filesystem), `/discovery/network-scan`, `/discovery/ct-monitor`, `/discovery/runs`, `/discovery/network-sightings`, `/discovery/ignored` |
+| Findings | `/findings`, `/findings/{id}` (Certificate Transparency findings lifecycle) |
 | Health | `/health/certificate/{id}/scan`, `/health/certificate/{id}/checks` |
 | Compliance | `/compliance/dashboard`, `/compliance/report` |
 | Reports | `/reports/{type}.{csv\|xlsx\|pdf\|json}` |

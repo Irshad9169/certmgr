@@ -133,7 +133,7 @@ class CertificateProvider(ABC):
 - Per-argument metacharacter validation; optional setuid to another user;
   full stdout/stderr/exit-code/duration capture.
 
-## 5. Data model (30 tables)
+## 5. Data model (35 tables)
 
 ```
 users 1───* api_tokens        roles 1───* users
@@ -147,6 +147,9 @@ certificates 1───* deployments *───1 servers
 certificates 1───* backups
 certificates 1───* certificate_health_checks
 certificates 1───* certificate_relationships
+certificates 1───* network_certificate_sightings
+certificates 1───* ct_observations, 1───* ct_findings
+certificates 1───* certificate_usage_scans 1───* certificate_usage_results
 servers *───* tags (server_tags)
 deployment_templates 1───* deployments
 webhook_endpoints 1───* webhook_deliveries
@@ -205,8 +208,26 @@ Templates are Jinja2-rendered per deployment; every run stores a log + the
 verification JSON.
 
 ### 6.5 Discovery
-Scheduled scan of configured paths → parse cert/key/PFX → fingerprint dedupe →
-import via the standard import pipeline → run summary + audit.
+Three independent mechanisms, sharing the `DiscoveryRun` model
+(`scan_type`: `filesystem` / `network` / `ct_log`) and the `DiscoveryIgnore`
+"stay deleted" list:
+- **Filesystem**: scheduled scan of configured paths → parse cert/key/PFX →
+  fingerprint dedupe → import via the standard import pipeline → run
+  summary + audit.
+- **Network scan**: TLS-connect to IP/CIDR/hostname targets (SNI omitted for
+  literal IPs per RFC 6066) → fetch whatever certificate is presented,
+  trusted or not → fingerprint dedupe → import; append-only
+  `NetworkCertificateSighting` history (a rotation at the same host:port
+  inserts a new row, not an overwrite). Admin-only; bounded concurrency +
+  a hard target-count cap.
+- **CT monitoring**: query crt.sh per admin-configured domain → for each
+  genuinely new `crt_sh_id`, fetch the raw PEM and parse it (crt.sh's JSON
+  response is only ever used for the `id`/serial/issuer used to dedupe
+  candidates before that fetch, not for certificate metadata) → run
+  deterministic detections (new certificate, unknown CA, sensitive/staging
+  hostname) → risk score → one correlated `CTFinding` per certificate
+  (evidence refreshed on rescan without silently reopening resolved work).
+  Admin-only.
 
 ### 6.6 Backup / restore / verify
 - Daily: archive each certificate's material (encrypted keys) + DB dump
@@ -220,6 +241,28 @@ import via the standard import pipeline → run summary + audit.
 - Event → queue `Notification` rows for enabled channels → worker delivers
   (SMTP/Slack/Teams/webhook). Outbound webhooks signed with HMAC-SHA256,
   delivery history with response codes.
+
+### 6.8 Wildcard / multi-SAN certificate usage discovery
+A different question from discovery above: not "what's out there," but
+"is *this specific* certificate the one actually being served." Eligible
+for wildcard or multi-SAN certificates only (a single-domain certificate
+has exactly one possible hostname — nothing to disambiguate). Candidate
+hostnames from up to four sources (certificate's own literal SAN entries,
+CertMgr inventory filtered to RFC 6125 single-label wildcard coverage,
+prior `NetworkCertificateSighting` rows, manual entry) are probed over
+TLS/SNI with certificate verification deliberately disabled (the question
+is "what did you present," not "is it trusted") — reusing the network
+scanner's `build_scan_context()` and the shared `x509_utils.parse_certificate()`.
+A candidate without an explicit port tries the configured ports in order
+and stops at the first reachable one (DNS failure skips the rest
+entirely). The authoritative result is always an exact SHA-256 fingerprint
+match against `certificates.fingerprint_sha256` — CN/SAN/wildcard coverage
+is a candidate signal only, never the determination. Results are upserted
+per (certificate, hostname, ip, port), preserving `first_seen_at` across
+rescans; a `different_certificate` result links to another tracked
+certificate when the presented fingerprint matches one. Runs via the
+existing Celery worker (the scan row is created before dispatch so the UI
+has an id to poll immediately), single-certificate or bulk-triggered.
 
 ## 7. Security architecture
 

@@ -33,11 +33,15 @@ Common codes: `UNAUTHORIZED`, `FORBIDDEN`, `VALIDATION_ERROR`, `NOT_FOUND`,
 | POST | `/certificates/{id}/clone` | Clone to new domains |
 | POST | `/certificates/import/upload` | Multipart import (cert/key/chain/pfx) |
 | POST | `/certificates/import/paths` | Server-side import from paths |
-| POST | `/certificates/bulk` | `{action: renew\|revoke\|deploy, ids: [...]}` |
+| POST | `/certificates/bulk` | `{action: renew\|revoke\|deploy\|issue\|delete\|usage_scan, ids: [...], options}` |
 | GET | `/certificates/{id}/download/{fmt}` | `zip\|pem\|key\|chain\|fullchain\|pfx` (audited; key gated) |
 | GET | `/certificates/{id}/executions` | Execution history with logs |
 | POST | `/certificates/{id}/favorite` · `/tags` | Favorites / tags |
 | POST | `/certificates/wizard/validate/*` | Step-level wizard validation |
+| GET | `/certificates/{id}/usage` | Usage discovery results + summary (wildcard/multi-SAN certificates) |
+| POST | `/certificates/{id}/usage/scan` | Trigger a usage discovery scan (`certificate:usage_scan`) |
+| GET | `/certificate-usage/scans/{id}` | Usage scan progress/status |
+| GET | `/certificate-usage/scans/{id}/results` | Results for one specific scan |
 
 ### Servers & deployment
 | Method | Path | Purpose |
@@ -55,7 +59,8 @@ Common codes: `UNAUTHORIZED`, `FORBIDDEN`, `VALIDATION_ERROR`, `NOT_FOUND`,
 | Resource | Paths |
 |---|---|
 | Hooks | `/hooks` (CRUD) |
-| Discovery | `/discovery/run`, `/discovery/runs` |
+| Discovery | `/discovery/run` (filesystem), `/discovery/network-scan`, `/discovery/ct-monitor`, `/discovery/runs`, `/discovery/network-sightings`, `/discovery/ignored` |
+| Findings | `/findings`, `/findings/{id}` (Certificate Transparency findings — status lifecycle) |
 | Health | `/health/certificate/{id}/scan`, `/health/certificate/{id}/checks` |
 | Compliance | `/compliance/dashboard`, `/compliance/report` |
 | Reports | `/reports/{type}.{csv\|xlsx\|pdf\|json}` |

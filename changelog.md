@@ -406,6 +406,46 @@ without.
 
 ---
 
+## [1.6.2] — 2026-09-10 — Network-sighting candidates, bulk scan, port fallback
+
+### Added
+- New **"Previously seen via network scan"** candidate source — surfaces
+  hosts the network scanner has *already confirmed* serving this exact
+  certificate fingerprint (`NetworkCertificateSighting`), each probed at
+  its actual previously-observed port rather than the configured port
+  list. The highest-confidence source available: it isn't "might be
+  covered," it's "was physically seen serving this," independently
+  confirmed by a different discovery mechanism.
+- **Bulk "Usage Scan"** action on the Certificates list page — select
+  multiple certificates and queue a scan for all of them at once, instead
+  of opening each one individually. Reuses the existing generic
+  `/certificates/bulk` dispatcher; a single-domain certificate in the
+  selection is skipped and reported failed, same tolerance as bulk delete.
+- **Port fallback**: a candidate without an explicit port now tries the
+  configured ports (443/8443/9443 by default) *in order* and stops at the
+  first one that's actually reachable — a wrong-certificate or broken-TLS
+  answer still counts as reachable and stops the chain, since that's
+  already a definitive result. A DNS failure (host-level, not port-level)
+  skips the remaining ports entirely. If nothing is reachable, one result
+  is reported at the first configured port, not one redundant row per port.
+- **Linked "different certificate" results**: when an endpoint serves a
+  different certificate, and that certificate's fingerprint matches one
+  CertMgr already tracks, the result now shows "Actually serving
+  Certificate #N (`*.otherapp.com`)" with a link straight to it, instead of
+  only raw, unattributed subject/issuer text.
+- The certificate detail page's Usage Discovery results now default to the
+  **"confirmed"** status filter (other statuses remain one click away),
+  and the summary card correctly reads "Multi-domain (SAN) certificate
+  usage" for non-wildcard certificates instead of always saying "Wildcard."
+
+### Fixed
+- Candidates used to be deduplicated by hostname alone, so a host proposed
+  by two sources with different ports (e.g. a network sighting on `:8443`
+  and a manual entry on `:443`) would silently collapse to just one of
+  them. Candidates are now keyed by `(hostname, port)`, so both survive.
+
+---
+
 ## [Unreleased] — Planned
 
 - SSO: LDAP/AD, OpenID Connect, OAuth2, SAML (settings scaffolding exists).

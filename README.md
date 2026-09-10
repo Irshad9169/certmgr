@@ -25,7 +25,8 @@ processing and an AI-assisted troubleshooter.
 | **Private key safety** | Keys are **never stored in the database** — always Fernet-encrypted at rest on disk |
 | **Database** | PostgreSQL 12+ (primary), **MariaDB/MySQL** (supported fallback — reuse an existing instance, see `docs/installation.md`), SQLite (dev/tests) |
 | **Deployment engine** | SSH/SFTP/SCP/rsync; Apache/Nginx/HAProxy/OpenVPN/Tomcat/Jetty/Node/IIS/custom templates; backup → replace → reload → TLS verify → automatic rollback |
-| **Discovery** | Scheduled scans of `/etc/letsencrypt`, `/etc/pki`, `/etc/nginx`, custom paths; auto-import |
+| **Discovery** | Scheduled filesystem scans (`/etc/letsencrypt`, `/etc/pki`, `/etc/nginx`, custom paths, auto-import); network TLS scanning (IP/CIDR/hostname targets); Certificate Transparency monitoring (crt.sh) with a lifecycle "Findings" model |
+| **Usage discovery** | For a wildcard or multi-SAN certificate, confirms via live TLS/SNI + exact SHA-256 fingerprint match which real endpoints are *actually serving it* — distinct from which hostnames it merely covers; candidates from the certificate's own SANs, CertMgr inventory, prior network-scan sightings, or manual entry; single or bulk trigger |
 | **Server management** | Inventory, connectivity checks, restricted remote command center (allowlist), service control |
 | **Monitoring** | Health scores (expiry, chain, hostname, key strength, TLS), compliance engine |
 | **Notifications** | SMTP, Slack, Microsoft Teams, generic signed webhooks; thresholds 60/30/15/7/3/1 days + lifecycle events |

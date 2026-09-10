@@ -250,21 +250,44 @@ for the probe itself (it's asking "what did you present", not "is it
 trusted") — this has no effect on any other certificate validation
 elsewhere in CertMgr.
 
-Candidate hostnames come from three sources (a per-scan checkbox each):
+Candidate hostnames come from four sources (a per-scan checkbox each):
 **This certificate's own SAN list** (its literal, non-wildcard SAN entries —
 for a pure multi-SAN certificate this is the complete, exact hostname set;
 for a mixed wildcard+SAN certificate, the extra literal hostnames alongside
 the wildcard's coverage), **Existing CertMgr inventory** (managed servers'
 hostnames, plus any certificate's tracked domains, that fall under one of
-the certificate's wildcard SANs), and **Manual hostnames** (one per line,
-optionally `host:port`). Wildcard coverage is computed correctly per RFC
-6125/X.509 rules — `*.example.com` covers exactly one additional DNS label
-(`api.example.com`), not arbitrary depth (`a.b.example.com` is NOT covered,
-and is deliberately excluded from inventory-sourced candidates — a plain
-suffix check would wrongly include it). There is no DNS-based *candidate
-enumeration* source — DNS *resolution* of each candidate is always
-performed regardless of source, but the codebase has no DNS integration for
-discovering hostnames it doesn't already know about.
+the certificate's wildcard SANs), **Previously seen via network scan**
+(hosts the network scanner has *already confirmed* serving this exact
+fingerprint — `NetworkCertificateSighting` rows, the highest-confidence
+source since it's a physically observed fact, not a guess), and **Manual
+hostnames** (one per line, optionally `host:port`). Wildcard coverage is
+computed correctly per RFC 6125/X.509 rules — `*.example.com` covers
+exactly one additional DNS label (`api.example.com`), not arbitrary depth
+(`a.b.example.com` is NOT covered, and is deliberately excluded from
+inventory-sourced candidates — a plain suffix check would wrongly include
+it). There is no DNS-based *candidate enumeration* source — DNS
+*resolution* of each candidate is always performed regardless of source,
+but the codebase has no DNS integration for discovering hostnames it
+doesn't already know about.
+
+A network sighting's host is often a bare IP address, not a hostname —
+network scans are commonly run against IP/CIDR targets, and
+`NetworkCertificateSighting` has no separate field recording a "real"
+hostname for those. Usage discovery just faithfully reuses whatever host
+value the network scanner recorded; to get real hostnames into
+network-sighted results, run network scans against hostnames rather than
+raw IPs in the first place.
+
+Candidates without an explicit port (inventory, SAN-list, and manual
+entries without a `:port`) try the configured ports **in order and stop at
+the first one that's reachable** — a wrong-certificate or broken-TLS answer
+still counts as reachable and stops the chain, since that's already a
+definitive result; only a DNS/TCP/timeout failure falls through to the next
+port. A DNS failure skips the remaining ports entirely (it's host-level,
+not port-specific — every other port would fail identically). If nothing
+is reachable, one result is reported at the first configured port, not one
+redundant "unreachable" row per port tried. A manual `host:port` entry or a
+network sighting's own observed port is probed exactly once, no fallback.
 
 Every result is one of:
 
@@ -277,13 +300,21 @@ Every result is one of:
 | `tls_failed` | TCP connected, but the TLS handshake failed |
 | `timeout` | DNS/connect/TLS exceeded the configured timeout |
 
+The results table defaults to the `confirmed` filter (other statuses are
+one click away). A `different_certificate` result whose presented
+fingerprint matches another certificate CertMgr already tracks links
+straight to it ("Actually serving Certificate #47 (`*.otherapp.com`)")
+instead of showing only raw, unattributed subject/issuer text.
+
 Configure via Settings: `cert_usage_scan.ports` (default `443,8443,9443`),
 `cert_usage_scan.timeout_seconds` (default `5`),
 `cert_usage_scan.max_concurrency` (default `25`, bounded — this never scans
 arbitrary IP ranges, only known/supplied hostnames). Trigger from a
 certificate's **Usage Discovery** tab (wildcard or multi-SAN certificates
 only — a single-domain certificate shows an explanatory message instead),
-gated on
+or in bulk from the **Certificates** list page (select multiple, click
+"Usage Scan" — an ineligible single-domain certificate in the selection is
+skipped and reported failed, same tolerance as bulk delete). Gated on
 `certificate:usage_scan` (admin + certificate manager, the same tier as
 renew/revoke — lower than network_scan/ct_monitor's admin-only bar, since
 this only probes known/supplied hostnames, never arbitrary ranges). Runs

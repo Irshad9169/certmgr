@@ -29,16 +29,24 @@
 ## RBAC permission matrix (seed)
 
 ```
-administrator        → all
+administrator        → all (incl. discovery:network_scan,ct_monitor — admin-only,
+                       touches infrastructure outside CertMgr's control — and ai:use)
 certificate_manager  → certificate:view,issue,renew,revoke,import,export,download_key,
-                       deploy,edit,bulk · server:view,deploy · hook:view ·
-                       notification:view · discovery:run,view · health:view
+                       deploy,edit,bulk,usage_scan · server:view,deploy · hook:view ·
+                       notification:view · discovery:run,view · health:view ·
+                       finding:view,manage
 operator             → certificate:view,issue,renew,import,export,deploy ·
                        server:view,deploy · hook:view · notification:view ·
-                       discovery:view · health:view
+                       discovery:view · health:view · finding:view
 read_only            → certificate:view · server:view · hook:view ·
-                       notification:view · audit:view · discovery:view · health:view
+                       notification:view · audit:view · discovery:view · health:view ·
+                       finding:view
 ```
+
+`certificate:usage_scan` sits at the renew/revoke tier (admin + certificate
+manager), deliberately lower than `discovery:network_scan`/`ct_monitor`'s
+admin-only bar — usage discovery only probes known/supplied hostnames,
+never arbitrary IP ranges.
 
 ## Command execution policy
 
