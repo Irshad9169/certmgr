@@ -107,7 +107,11 @@ class CertificateUsageResult(Base, IntPkMixin):
     error_message: Mapped[str | None] = mapped_column(String(512), nullable=True)
 
     first_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
-    last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    # Nullable — deliberately NOT defaulted to "now": a candidate that has
+    # never once been confirmed/different_certificate (e.g. unreachable on
+    # every scan since it was first added) has genuinely never been "seen"
+    # serving anything, and must not show a fake "last seen: just now".
+    last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     last_checked_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
     scan_id: Mapped[int | None] = mapped_column(

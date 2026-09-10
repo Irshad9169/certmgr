@@ -38,10 +38,12 @@ def get_scan(scan_id: int, db: DbSession, user: CurrentUser):
     if not has_permission(user.role_name.value, P_["cert"]["view"]):
         raise PermissionDeniedError("You are not authorized to view certificate usage scans")
     from app.models.certificate_usage import CertificateUsageScan
+    from app.services.certificate_usage_service import mark_stale_scan_failed
 
     scan = db.query(CertificateUsageScan).filter(CertificateUsageScan.id == scan_id).first()
     if scan is None:
         raise NotFoundError("Scan not found")
+    mark_stale_scan_failed(db, scan)
     return _serialize_scan(scan)
 
 

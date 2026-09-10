@@ -334,6 +334,21 @@ def probe_hostname_with_port_fallback(
     return first_port, first_result
 
 
+#  Higher number = more confident this candidate was proposed correctly —
+#  used to upgrade (never downgrade) discovery_source when the same
+#  (certificate, hostname, ip, port) is reached by more than one source
+#  across a scan's lifetime, so a network sighting's provenance can never
+#  be silently overwritten by a lower-confidence source touching the row
+#  first (a real bug found by an independent audit: source labels used to
+#  just reflect whichever candidate loop happened to run first).
+_SOURCE_PRECEDENCE = {
+    "inventory": 0,
+    "certificate_sans": 1,
+    "manual": 2,
+    "network_sighting": 3,
+}
+
+
 def _record_result(db: Session, scan: CertificateUsageScan, certificate: Certificate,
                    hostname: str, port: int, source: str, probe: _ProbeResult) -> str:
     """Upsert-in-place: first_seen_at is preserved across rescans."""
@@ -345,12 +360,17 @@ def _record_result(db: Session, scan: CertificateUsageScan, certificate: Certifi
         CertificateUsageResult.port == port,
     ).first()
 
+    reachable = probe.status in (CertUsageResultStatus.CONFIRMED.value, CertUsageResultStatus.DIFFERENT_CERTIFICATE.value)
+
     if existing is None:
         existing = CertificateUsageResult(
             certificate_id=certificate.id, hostname=hostname, ip_address=probe.ip_address,
             port=port, discovery_source=source, first_seen_at=now,
+            last_seen_at=(now if reachable else None),
         )
         db.add(existing)
+    elif _SOURCE_PRECEDENCE.get(source, 0) > _SOURCE_PRECEDENCE.get(existing.discovery_source, 0):
+        existing.discovery_source = source
 
     existing.status = probe.status
     existing.expected_fingerprint = certificate.fingerprint_sha256
@@ -373,8 +393,18 @@ def _record_result(db: Session, scan: CertificateUsageScan, certificate: Certifi
             Certificate.fingerprint_sha256 == probe.presented_fingerprint
         ).first()
         existing.presented_certificate_id = known.id if known else None
-    if probe.status in (CertUsageResultStatus.CONFIRMED.value, CertUsageResultStatus.DIFFERENT_CERTIFICATE.value):
+    if reachable:
         existing.last_seen_at = now
+    # This session factory runs with autoflush=False (see
+    # app.core.database.SessionLocal) — without an explicit flush here, a
+    # later call in the same scan for a different source but the same
+    # (certificate, hostname, ip, port) wouldn't see this pending insert via
+    # the "existing" lookup above, and would attempt its own INSERT for the
+    # identical unique key, crashing the whole scan with an IntegrityError
+    # at final commit time. Found by a test that intentionally pointed two
+    # sources at the same target — a real, if uncommon, collision (e.g. a
+    # network-sighted host that inventory also independently discovers).
+    db.flush()
     return probe.status
 
 
@@ -419,7 +449,14 @@ def start_scan(
     from app.services.settings_service import get_setting
 
     resolved_sources = sources or ["sans", "inventory", "network_sightings", "manual"]
-    raw_ports = ports or [
+    # `ports is not None` (not a plain truthiness check): the caller
+    # explicitly unchecking every port checkbox sends [], which must be
+    # rejected outright — silently falling back to the configured default
+    # ports would ignore that choice and scan ports the user just said not
+    # to (previously happened silently here, found by an independent audit).
+    if ports is not None and not ports:
+        raise ValidationAppError("At least one port is required")
+    raw_ports = ports if ports is not None else [
         int(p) for p in (get_setting(db, "cert_usage_scan.ports") or "443,8443,9443").split(",") if p.strip()
     ]
     resolved_ports = [validate_port(p) for p in raw_ports]
@@ -475,65 +512,80 @@ def start_scan(
         db.commit()
         return scan
 
-    ctx = network_scanner.build_scan_context()
-    counts = {
-        CertUsageResultStatus.CONFIRMED.value: 0,
-        CertUsageResultStatus.DIFFERENT_CERTIFICATE.value: 0,
-        CertUsageResultStatus.UNREACHABLE.value: 0,
-        CertUsageResultStatus.DNS_FAILED.value: 0,
-        CertUsageResultStatus.TLS_FAILED.value: 0,
-        CertUsageResultStatus.TIMEOUT.value: 0,
-    }
-
-    def _finish(hostname: str, port: int, source: str, probe: _ProbeResult) -> None:
-        status = _record_result(db, scan, certificate, hostname, port, source, probe)
-        counts[status] = counts.get(status, 0) + 1
-        scan.scanned_count += 1
-
-    # Worker threads perform ONLY network I/O — no DB session touched here,
-    # matching network_scanner.scan_targets()'s exact concurrency pattern.
-    with ThreadPoolExecutor(max_workers=max(resolved_concurrency, 1)) as pool:
-        fallback_futures = {
-            pool.submit(probe_hostname_with_port_fallback, hostname, resolved_ports,
-                       certificate.fingerprint_sha256 or "", timeout=resolved_timeout, ctx=ctx): (hostname, source)
-            for hostname, source in fallback_hostnames.items()
+    try:
+        ctx = network_scanner.build_scan_context()
+        counts = {
+            CertUsageResultStatus.CONFIRMED.value: 0,
+            CertUsageResultStatus.DIFFERENT_CERTIFICATE.value: 0,
+            CertUsageResultStatus.UNREACHABLE.value: 0,
+            CertUsageResultStatus.DNS_FAILED.value: 0,
+            CertUsageResultStatus.TLS_FAILED.value: 0,
+            CertUsageResultStatus.TIMEOUT.value: 0,
         }
-        explicit_futures = {
-            pool.submit(probe_hostname, hostname, port, certificate.fingerprint_sha256 or "",
-                       timeout=resolved_timeout, ctx=ctx): (hostname, port, source)
-            for (hostname, port), source in explicit_targets.items()
-        }
-        for future, (hostname, source) in fallback_futures.items():
-            try:
-                port, probe = future.result()
-            except Exception as exc:  # noqa: BLE001
-                port, probe = resolved_ports[0], _ProbeResult(
-                    status=CertUsageResultStatus.UNREACHABLE.value,
-                    error_code="probe_error", error_message=str(exc)[:500],
-                )
-            _finish(hostname, port, source, probe)
-        for future, (hostname, port, source) in explicit_futures.items():
-            try:
-                probe = future.result()
-            except Exception as exc:  # noqa: BLE001
-                probe = _ProbeResult(status=CertUsageResultStatus.UNREACHABLE.value,
-                                     error_code="probe_error", error_message=str(exc)[:500])
-            _finish(hostname, port, source, probe)
 
-    scan.confirmed_count = counts[CertUsageResultStatus.CONFIRMED.value]
-    scan.different_certificate_count = counts[CertUsageResultStatus.DIFFERENT_CERTIFICATE.value]
-    scan.unreachable_count = counts[CertUsageResultStatus.UNREACHABLE.value]
-    scan.error_count = (counts[CertUsageResultStatus.DNS_FAILED.value]
-                       + counts[CertUsageResultStatus.TLS_FAILED.value]
-                       + counts[CertUsageResultStatus.TIMEOUT.value])
-    scan.status = CertUsageScanStatus.COMPLETED.value
-    scan.completed_at = utcnow()
-    scan.log = (
-        f"{scan.scanned_count} candidate(s) scanned: "
-        f"{scan.confirmed_count} confirmed, {scan.different_certificate_count} different certificate, "
-        f"{scan.unreachable_count} unreachable, {scan.error_count} DNS/TLS/timeout errors."
-    )
-    db.commit()
+        def _finish(hostname: str, port: int, source: str, probe: _ProbeResult) -> None:
+            status = _record_result(db, scan, certificate, hostname, port, source, probe)
+            counts[status] = counts.get(status, 0) + 1
+            scan.scanned_count += 1
+
+        # Worker threads perform ONLY network I/O — no DB session touched here,
+        # matching network_scanner.scan_targets()'s exact concurrency pattern.
+        with ThreadPoolExecutor(max_workers=max(resolved_concurrency, 1)) as pool:
+            fallback_futures = {
+                pool.submit(probe_hostname_with_port_fallback, hostname, resolved_ports,
+                           certificate.fingerprint_sha256 or "", timeout=resolved_timeout, ctx=ctx): (hostname, source)
+                for hostname, source in fallback_hostnames.items()
+            }
+            explicit_futures = {
+                pool.submit(probe_hostname, hostname, port, certificate.fingerprint_sha256 or "",
+                           timeout=resolved_timeout, ctx=ctx): (hostname, port, source)
+                for (hostname, port), source in explicit_targets.items()
+            }
+            for future, (hostname, source) in fallback_futures.items():
+                try:
+                    port, probe = future.result()
+                except Exception as exc:  # noqa: BLE001
+                    port, probe = resolved_ports[0], _ProbeResult(
+                        status=CertUsageResultStatus.UNREACHABLE.value,
+                        error_code="probe_error", error_message=str(exc)[:500],
+                    )
+                _finish(hostname, port, source, probe)
+            for future, (hostname, port, source) in explicit_futures.items():
+                try:
+                    probe = future.result()
+                except Exception as exc:  # noqa: BLE001
+                    probe = _ProbeResult(status=CertUsageResultStatus.UNREACHABLE.value,
+                                         error_code="probe_error", error_message=str(exc)[:500])
+                _finish(hostname, port, source, probe)
+
+        scan.confirmed_count = counts[CertUsageResultStatus.CONFIRMED.value]
+        scan.different_certificate_count = counts[CertUsageResultStatus.DIFFERENT_CERTIFICATE.value]
+        scan.unreachable_count = counts[CertUsageResultStatus.UNREACHABLE.value]
+        scan.error_count = (counts[CertUsageResultStatus.DNS_FAILED.value]
+                           + counts[CertUsageResultStatus.TLS_FAILED.value]
+                           + counts[CertUsageResultStatus.TIMEOUT.value])
+        scan.status = CertUsageScanStatus.COMPLETED.value
+        scan.completed_at = utcnow()
+        scan.log = (
+            f"{scan.scanned_count} candidate(s) scanned: "
+            f"{scan.confirmed_count} confirmed, {scan.different_certificate_count} different certificate, "
+            f"{scan.unreachable_count} unreachable, {scan.error_count} DNS/TLS/timeout errors."
+        )
+        db.commit()
+    except Exception as exc:  # noqa: BLE001
+        # Anything unexpected here (not a single probe failing — those are
+        # already caught above — but something breaking the scan loop
+        # itself) must not leave the row stuck at "running" forever, which
+        # happened for real this session with a CT monitor run and required
+        # manual DB cleanup. Mark it failed rather than leaving the frontend
+        # polling indefinitely.
+        db.rollback()
+        scan.status = CertUsageScanStatus.FAILED.value
+        scan.completed_at = utcnow()
+        scan.log = f"Scan failed: {exc}"[:2000]
+        db.commit()
+        logger.error("cert usage scan #%s failed for certificate #%s: %s", scan.id, certificate.id, exc)
+        return scan
 
     logger.info(
         "cert usage scan #%s completed for certificate #%s: candidates=%s confirmed=%s different=%s errors=%s",
@@ -552,6 +604,38 @@ def start_scan(
                                                "confirmed": scan.confirmed_count})
     db.commit()
     return scan
+
+
+_STALE_SCAN_MINUTES = 30
+
+
+def mark_stale_scan_failed(db: Session, scan: CertificateUsageScan) -> None:
+    """A worker crash or a deploy restart mid-scan leaves the row at
+    "running" forever — the try/except around the scan body in start_scan()
+    only catches a genuine Python exception, not the process dying outright
+    (exactly what happened for real this session with a CT monitor run,
+    requiring manual DB cleanup). Since nothing else self-heals that case,
+    check for it lazily whenever a scan is read: a "running" scan started
+    more than _STALE_SCAN_MINUTES ago is treated as dead, not actually
+    still in progress — a usage-discovery scan normally completes in
+    seconds to low minutes, so this is a generous safety net, not a tight
+    SLA."""
+    if scan.status != CertUsageScanStatus.RUNNING.value or scan.started_at is None:
+        return
+    from datetime import timedelta
+
+    from app.core.timeutils import ensure_aware
+
+    if utcnow() - ensure_aware(scan.started_at) < timedelta(minutes=_STALE_SCAN_MINUTES):
+        return
+    scan.status = CertUsageScanStatus.FAILED.value
+    scan.completed_at = utcnow()
+    scan.log = (
+        f"Marked failed: no progress for over {_STALE_SCAN_MINUTES} minutes — "
+        "the worker likely crashed or was restarted mid-scan."
+    )
+    db.commit()
+    logger.warning("cert usage scan #%s marked failed as stale (started_at=%s)", scan.id, scan.started_at)
 
 
 def usage_summary(db: Session, certificate_id: int) -> dict:

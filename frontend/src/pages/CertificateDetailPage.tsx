@@ -748,7 +748,10 @@ export default function CertificateDetailPage() {
         </DialogContent>
         <DialogActions>
           <Button onClick={() => setScanDialogOpen(false)}>Cancel</Button>
-          <Button variant="contained" onClick={() => triggerScan.mutate()} disabled={triggerScan.isPending}>
+          <Button
+            variant="contained" onClick={() => triggerScan.mutate()}
+            disabled={triggerScan.isPending || !Object.values(scanPorts).some(Boolean)}
+          >
             Start Scan
           </Button>
         </DialogActions>

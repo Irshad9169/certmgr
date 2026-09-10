@@ -12,6 +12,7 @@ from conftest import _generate_self_signed  # noqa: F401
 from test_network_scan_service import _LocalTLSServer  # noqa: F401
 
 from app.core.exceptions import ValidationAppError
+from app.core.timeutils import utcnow
 from app.models.certificate import Certificate
 from app.models.certificate_usage import CertificateUsageResult
 from app.models.enums import CertificateType, ValidationMethod
@@ -522,3 +523,132 @@ def test_different_certificate_with_unrecognized_cert_has_no_link(db, tls_server
     result = db.query(CertificateUsageResult).filter(CertificateUsageResult.certificate_id == scanned_cert.id).one()
     assert result.status == "different_certificate"
     assert result.presented_certificate_id is None
+
+
+def test_scan_body_exception_marks_scan_failed_not_stuck_running(db, monkeypatch):
+    """Regression (found by an independent audit): an unhandled exception
+    inside the scan loop used to leave the row at "running" forever — the
+    exact class of incident that happened for real this session with a CT
+    monitor run and required manual DB cleanup."""
+    from app.services import certificate_usage_service as svc
+
+    cert = _make_wildcard_cert(db, fingerprint="00" * 32)
+
+    def _boom(*a, **k):
+        raise RuntimeError("simulated network stack failure")
+
+    monkeypatch.setattr(svc.network_scanner, "build_scan_context", _boom)
+
+    scan = start_scan(db, cert.id, sources=["manual"], hostnames=["127.0.0.1:443"])
+
+    assert scan.status == "failed"
+    assert scan.completed_at is not None
+    assert "simulated network stack failure" in scan.log
+
+
+def test_mark_stale_scan_failed_leaves_recent_running_scans_alone(db):
+    from app.models.certificate_usage import CertificateUsageScan
+    from app.services.certificate_usage_service import mark_stale_scan_failed
+
+    cert = _make_wildcard_cert(db, fingerprint="00" * 32)
+    scan = CertificateUsageScan(certificate_id=cert.id, status="running", sources=["manual"], started_at=utcnow())
+    db.add(scan)
+    db.commit()
+
+    mark_stale_scan_failed(db, scan)
+
+    assert scan.status == "running"
+
+
+def test_mark_stale_scan_failed_fails_an_old_running_scan(db):
+    from datetime import timedelta
+
+    from app.models.certificate_usage import CertificateUsageScan
+    from app.services.certificate_usage_service import mark_stale_scan_failed
+
+    cert = _make_wildcard_cert(db, fingerprint="00" * 32)
+    scan = CertificateUsageScan(
+        certificate_id=cert.id, status="running", sources=["manual"],
+        started_at=utcnow() - timedelta(hours=2),
+    )
+    db.add(scan)
+    db.commit()
+
+    mark_stale_scan_failed(db, scan)
+
+    assert scan.status == "failed"
+    assert scan.completed_at is not None
+    assert "crashed" in scan.log or "restarted" in scan.log
+
+
+def test_last_seen_at_is_none_for_a_candidate_never_confirmed_reachable(db):
+    """Regression: the column used to default to utcnow() at the ORM level,
+    so a brand-new row for an unreachable candidate got silently stamped
+    with the scan's own timestamp — as if it had just been seen serving
+    something, when it never has been."""
+    cert = _make_wildcard_cert(db, fingerprint="00" * 32)
+    unreachable_port = _closed_port()
+
+    start_scan(db, cert.id, sources=["manual"], hostnames=[f"127.0.0.1:{unreachable_port}"], timeout=1)
+
+    result = db.query(CertificateUsageResult).filter(CertificateUsageResult.certificate_id == cert.id).one()
+    assert result.status in ("unreachable", "timeout")
+    assert result.last_seen_at is None
+
+
+def test_last_seen_at_is_set_when_actually_confirmed(db, tls_server):
+    server, cert_pem = tls_server
+    _, meta = parse_certificate(cert_pem)
+    cert = _make_wildcard_cert(db, fingerprint=meta.fingerprint_sha256)
+
+    start_scan(db, cert.id, sources=["manual"], hostnames=[f"127.0.0.1:{server.port}"])
+
+    result = db.query(CertificateUsageResult).filter(CertificateUsageResult.certificate_id == cert.id).one()
+    assert result.status == "confirmed"
+    assert result.last_seen_at is not None
+
+
+def test_discovery_source_upgrades_to_higher_precedence_source_not_downgrades(db, monkeypatch):
+    """Regression: discovery_source was only ever set at row creation and
+    never updated afterward, so whichever source's probe happened to
+    complete first "won" the label permanently — even a lower-confidence
+    guess (inventory) beating a network sighting (a physically observed
+    fact) just because inventory candidates are processed first. The
+    reachability outcome is irrelevant here — precedence upgrading happens
+    regardless of probe status — so DNS is pinned to a fixed, non-routable
+    TEST-NET address (RFC 5737) rather than relying on the real (and
+    inconsistent — a corporate resolver can behave differently between
+    calls) resolution of a fake hostname, which otherwise risks the two
+    sources' probes landing on different `ip_address` values and creating
+    two separate rows instead of colliding on the one being tested."""
+    from app.models.job import NetworkCertificateSighting
+    from app.models.server import Server
+    from app.services import certificate_usage_service as svc
+
+    monkeypatch.setattr(svc.socket, "gethostbyname", lambda h: "203.0.113.1")
+
+    cert = _make_wildcard_cert(db, domain="*.example.com", fingerprint="00" * 32)
+    db.add(Server(hostname="api.example.com", environment="production"))
+    db.add(NetworkCertificateSighting(
+        fingerprint_sha256="00" * 32, certificate_id=cert.id, host="api.example.com", port=443,
+    ))
+    db.commit()
+
+    start_scan(db, cert.id, sources=["inventory", "network_sightings"], ports=[443], timeout=0.5)
+
+    result = (
+        db.query(CertificateUsageResult)
+        .filter(CertificateUsageResult.certificate_id == cert.id, CertificateUsageResult.hostname == "api.example.com")
+        .one()
+    )
+    assert result.discovery_source == "network_sighting"
+
+
+def test_start_scan_rejects_an_explicitly_empty_ports_list(db):
+    """Deselecting every port checkbox must be rejected outright, not
+    silently fall back to the configured default ports (which would scan
+    ports the user just explicitly said not to)."""
+    cert = _make_wildcard_cert(db, fingerprint="00" * 32)
+
+    with pytest.raises(ValidationAppError):
+        start_scan(db, cert.id, sources=["manual"], hostnames=["api.example.com"], ports=[])

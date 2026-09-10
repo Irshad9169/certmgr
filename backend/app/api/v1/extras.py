@@ -116,6 +116,8 @@ def network_sightings(db: DbSession, user: CurrentUser, certificate_id: int | No
 
 @discovery_router.get("/runs")
 def discovery_runs(db: DbSession, user: CurrentUser, limit: int = Query(20, ge=1, le=200)):
+    if not has_permission(user.role_name.value, P_["discovery"]["view"]):
+        raise PermissionDeniedError("You are not authorized to view discovery runs")
     from app.models.job import DiscoveryRun
 
     rows = db.query(DiscoveryRun).order_by(DiscoveryRun.started_at.desc()).limit(limit).all()
@@ -137,6 +139,8 @@ def discovery_runs(db: DbSession, user: CurrentUser, limit: int = Query(20, ge=1
 def list_discovery_ignores(db: DbSession, user: CurrentUser):
     """Certificates deliberately deleted from tracking — future discovery
     scans skip these fingerprints instead of re-importing the same file."""
+    if not has_permission(user.role_name.value, P_["discovery"]["view"]):
+        raise PermissionDeniedError("You are not authorized to view discovery ignores")
     from app.models.job import DiscoveryIgnore
 
     rows = db.query(DiscoveryIgnore).order_by(DiscoveryIgnore.created_at.desc()).all()
