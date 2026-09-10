@@ -446,6 +446,37 @@ without.
 
 ---
 
+## [1.6.3] — 2026-09-10 — Fixes from an independent audit
+
+### Fixed
+- A scan crashing mid-run — or a worker crash / deploy restart mid-scan —
+  left the row stuck at `"running"` forever; no code path anywhere ever
+  assigned `failed`/`cancelled`. `start_scan()` now catches an in-body
+  exception and marks the row failed; a `"running"` scan older than 30
+  minutes (scans normally finish in seconds) is now also detected as stale
+  and marked failed whenever read, so the frontend's polling loop actually
+  terminates.
+- Two candidate sources resolving to the exact same
+  `(certificate, hostname, ip, port)` within one scan could crash it
+  outright with a UNIQUE constraint violation, since this session's DB
+  factory runs with `autoflush=False` and a later lookup in the same scan
+  didn't see an earlier call's pending, unflushed insert. Now flushed after
+  every recorded result.
+- `last_seen_at` was silently stamped with "now" for a brand-new row even
+  when the candidate was unreachable on its very first scan. Now nullable,
+  and only set when actually confirmed/different_certificate.
+- `discovery_source` was only set at row creation and never updated
+  afterward, so a network sighting (a physically observed fact) could lose
+  its provenance to a lower-confidence inventory guess just by finishing
+  second. Now upgrades to the higher-precedence source on any later touch,
+  never downgrades.
+- `GET /discovery/runs` and `/discovery/ignored` had no permission check,
+  unlike their sibling `DELETE` endpoint in the same file.
+- An explicitly empty ports list (every checkbox unchecked) silently fell
+  back to the configured defaults instead of being rejected.
+
+---
+
 ## [Unreleased] — Planned
 
 - SSO: LDAP/AD, OpenID Connect, OAuth2, SAML (settings scaffolding exists).
