@@ -48,6 +48,7 @@ from app.services.providers.base import IssueRequest
 from app.services.providers.registry import get_registry
 from app.services.x509_utils import (
     parse_certificate,
+    parse_chain_pem,
     parse_pfx,
     parse_private_key,
     public_key_matches,
@@ -801,6 +802,20 @@ def import_certificate(
 
     _, meta = parse_certificate(cert_data)
     primary = meta.sans[0] if meta.sans else payload.get("domain") or "imported-certificate"
+
+    if chain_data:
+        # Unlike cert/key/pfx above, an uploaded chain file used to be
+        # written to disk completely unvalidated — no parsing, no format
+        # check, nothing. Re-serializing from parsed certificate objects
+        # (rather than writing the uploaded bytes verbatim) also strips any
+        # extraneous content an attacker could otherwise smuggle alongside
+        # a real PEM block, since parse_chain_pem() only ever extracts
+        # well-formed BEGIN/END CERTIFICATE sections and ignores everything
+        # else in the buffer.
+        chain_certs = parse_chain_pem(chain_data)
+        if not chain_certs:
+            raise ValidationAppError("Chain file does not contain any recognizable PEM certificates")
+        chain_data = b"".join(_cert_to_pem(c) for c in chain_certs)
 
     # Duplicate detection by fingerprint
     existing = db.query(Certificate).filter(Certificate.fingerprint_sha256 == meta.fingerprint_sha256).first()

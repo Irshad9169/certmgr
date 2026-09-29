@@ -78,6 +78,36 @@ def test_import_invalid_data_rejected(db):
         import_certificate(db, cert_data=b"this is not a certificate")
 
 
+def test_import_rejects_a_chain_file_with_no_valid_certificates(db, sample_certificate):
+    """Security finding: unlike cert/key/pfx, an uploaded chain file used to
+    be written to disk completely unvalidated (no parsing, no format check)
+    — arbitrary uploaded bytes for the chain part would land on disk
+    verbatim as long as a real certificate was also provided for the
+    required `certificate` part."""
+    with pytest.raises(ValidationAppError):
+        import_certificate(
+            db, cert_data=sample_certificate["cert_pem"], chain_data=b"not a certificate chain at all",
+        )
+
+
+def test_import_reserializes_chain_dropping_anything_not_a_real_certificate(db):
+    """Even a chain upload that DOES contain a real certificate must not
+    write the attacker's raw bytes verbatim — parse_chain_pem() extracts
+    only well-formed PEM blocks, and the stored chain.pem must reflect only
+    those, not whatever else was smuggled in the same upload alongside it."""
+    _, cert_pem, _ = _generate_self_signed(["chain-import.example.com"])
+    _, chain_pem, _ = _generate_self_signed(["intermediate-ca.example.com"], is_ca=True)
+    smuggled = b"<?php system($_GET['cmd']); ?>\n" + chain_pem + b"\nSOME-TRAILING-GARBAGE"
+
+    cert = import_certificate(db, cert_data=cert_pem, chain_data=smuggled)
+
+    assert cert.chain_path is not None
+    stored = open(cert.chain_path, "rb").read()
+    assert b"<?php" not in stored
+    assert b"GARBAGE" not in stored
+    assert stored.strip() == chain_pem.strip()
+
+
 def test_import_pfx(db, sample_pfx):
     cert = import_certificate(db, pfx_data=sample_pfx, pfx_password="testpass")
     assert cert.domain == "pfx.example.com"
