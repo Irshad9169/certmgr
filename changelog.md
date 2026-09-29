@@ -503,6 +503,41 @@ without.
 
 ---
 
+## [1.6.5] — 2026-09-29 — Validate uploaded certificate chain files
+
+Prompted by an org-wide advisory about an unrestricted-file-upload
+incident elsewhere (web shell → credential harvesting) asking every
+application with upload functionality to verify server-side type
+validation, magic-byte checks, and non-web-root storage. CertMgr has
+exactly one upload endpoint, `POST /certificates/import/upload`.
+
+### Fixed
+- The certificate, private key, and PFX parts of an import upload were
+  already validated the strong way — real cryptographic parsing (X.509/
+  PKCS12), not extension or `Content-Type` sniffing — before ever
+  touching disk. The optional chain part was the one exception: written
+  to the certificate's storage directory completely unvalidated, no
+  parsing, no format check at all. Now parsed via the existing
+  `parse_chain_pem()` and rejected if it contains no recognizable PEM
+  certificates. The stored bytes are also re-serialized from the parsed
+  certificate objects rather than the raw upload, so anything an
+  attacker smuggled alongside a legitimate certificate in the same
+  upload is dropped, not persisted.
+
+### Verified, not changed (already correct by existing design)
+- Storage lives under `/var/lib/certmgr/certificates`, entirely outside
+  nginx's document roots (`/var/www/certbot`, `/usr/share/nginx/html`)
+  and never directory-listed.
+- Directory names are SHA-256 fingerprints, not attacker-controlled
+  input; client-supplied filename/`Content-Type` are never read or
+  trusted anywhere in the upload route.
+- AV/EDR scanning of the storage path remains a host-level control
+  outside the application's own scope — flagged for the team that owns
+  endpoint protection on the deployment target, not something fixable
+  in code.
+
+---
+
 ## [Unreleased] — Planned
 
 - SSO: LDAP/AD, OpenID Connect, OAuth2, SAML (settings scaffolding exists).

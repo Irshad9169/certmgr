@@ -52,7 +52,10 @@ Scan**).
 Upload PEM/CRT/CER (+ optional key and chain) or a PFX/PKCS12 with its password.
 The platform automatically detects issuer, expiry, subject, SANs, algorithm,
 fingerprint and key size, validates key/cert match, and stores the private key
-encrypted. Duplicates (by fingerprint) are rejected.
+encrypted. Duplicates (by fingerprint) are rejected. Every uploaded part is
+validated by actually parsing it (X.509/PKCS12/PEM chain extraction) before
+anything is written to disk — an unrecognized certificate, key, or chain file
+is rejected outright, not stored.
 
 ## Deploy to a server
 

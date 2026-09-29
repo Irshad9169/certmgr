@@ -10,7 +10,7 @@
 | Unauthorized access | JWT (HS256, issuer, expiry, type), RBAC permission matrix, TOTP MFA, secure cookies, rate limiting |
 | CSRF | Double-submit cookie pattern for cookie-authenticated state-changing requests; bearer-token APIs exempt (not CSRF-able) |
 | XSS | CSP `frame-ancestors 'none'`, no inline scripts in production builds, React default escaping, `X-Content-Type-Options: nosniff` |
-| Path traversal / unsafe uploads | Upload size limits, extension + content sniffing, storage path jail (`resolve_within_root`), safe filenames |
+| Path traversal / unsafe uploads | The one upload endpoint (`POST /certificates/import/upload`) validates every part by actually parsing it — X.509 for cert, PKCS12 for PFX, PEM chain extraction for chain (rejected + never persisted if none of the uploaded parts parse) — not extension or `Content-Type` sniffing, which are never even read from the request. Upload size limits (`CERTMGR_MAX_UPLOAD_BYTES`); storage lives under `storage_root` (`/var/lib/certmgr/certificates` by default), entirely outside any web-served document root, with a path jail (`resolve_within_root`) and fingerprint-derived (non-attacker-controlled) directory names |
 | Remote server compromise via command center | Allowlist-only commands, service name allowlist, no free-form shell |
 | Supply chain | Pinned dependencies, CI dependency scan (Trivy on images), non-root container user, read-only root FS |
 | Secrets in logs | Redaction filter applied at the logging boundary (private keys, passwords, tokens, JWT regex) |
