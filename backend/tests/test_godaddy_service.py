@@ -149,14 +149,17 @@ def test_fetch_combines_intermediate_and_cross_into_chain(db, monkeypatch):
     from app.services.godaddy_client import GoDaddyClient
 
     _obj, cert_pem, _key = _generate_self_signed(["chain-test.example.com"])
+    _obj, intermediate_pem, _key = _generate_self_signed(["intermediate.example.com"], is_ca=True)
+    _obj, cross_pem, _key = _generate_self_signed(["cross.example.com"], is_ca=True)
+    _obj, root_pem, _key = _generate_self_signed(["root.example.com"], is_ca=True)
 
     def fake_download(self, cert_id):
         return {
             "pems": {
                 "certificate": cert_pem.decode(),
-                "intermediate": "-----BEGIN CERTIFICATE-----\nINTERMEDIATE\n-----END CERTIFICATE-----\n",
-                "cross": "-----BEGIN CERTIFICATE-----\nCROSS\n-----END CERTIFICATE-----\n",
-                "root": "-----BEGIN CERTIFICATE-----\nROOT\n-----END CERTIFICATE-----\n",
+                "intermediate": intermediate_pem.decode(),
+                "cross": cross_pem.decode(),
+                "root": root_pem.decode(),
             }
         }
 
@@ -166,9 +169,9 @@ def test_fetch_combines_intermediate_and_cross_into_chain(db, monkeypatch):
     cert = db.query(Certificate).filter(Certificate.id == result["certificate_id"]).first()
     assert cert.chain_path is not None
     chain_content = open(cert.chain_path).read()
-    assert "INTERMEDIATE" in chain_content
-    assert "CROSS" in chain_content
-    assert "ROOT" not in chain_content  # root is deliberately excluded from the served chain
+    assert intermediate_pem.decode().strip() in chain_content
+    assert cross_pem.decode().strip() in chain_content
+    assert root_pem.decode().strip() not in chain_content  # root is deliberately excluded from the served chain
 
 
 def test_import_godaddy_api_requires_permission(client, role_headers_factory):

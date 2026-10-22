@@ -25,6 +25,12 @@ def test_read_only_cannot_delete(client, role_headers_factory):
     assert resp.status_code == 403
 
 
+def test_read_only_cannot_edit(client, role_headers_factory):
+    headers = role_headers_factory("ro_edit", "read_only")
+    resp = client.patch("/api/v1/certificates/999999", headers=headers, json={"auto_renew": False})
+    assert resp.status_code == 403
+
+
 def test_read_only_cannot_clone(client, role_headers_factory):
     headers = role_headers_factory("ro_clone", "read_only")
     resp = client.post("/api/v1/certificates/999999/clone", headers=headers, json={})

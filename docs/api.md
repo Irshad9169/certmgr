@@ -27,6 +27,7 @@ Common codes: `UNAUTHORIZED`, `FORBIDDEN`, `VALIDATION_ERROR`, `NOT_FOUND`,
 |---|---|---|
 | GET | `/certificates` | Inventory (search, filters, sort, pagination) |
 | GET | `/certificates/{id}` | Details |
+| PATCH | `/certificates/{id}` | Edit platform metadata (`auto_renew`, `environment`, `owner_id`, `notes`) — never the cert/key material (`certificate:edit`) |
 | POST | `/certificates/issue` | Issue (wizard payload) — returns queued or completed |
 | POST | `/certificates/{id}/renew` | Renew (`{force}`) |
 | POST | `/certificates/{id}/revoke` | Revoke (`{reason, delete_after}`) |

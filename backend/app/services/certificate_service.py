@@ -177,6 +177,35 @@ def get_certificate(db: Session, certificate_id: int, *, load_relations: bool = 
     return cert
 
 
+def update_certificate(db: Session, certificate_id: int, *, payload: dict[str, Any],
+                       user: User | None = None) -> Certificate:
+    """Partial update of platform metadata (auto_renew, environment, owner,
+    notes) — never the cryptographic material itself. Omitted/None fields in
+    payload are left unchanged."""
+    cert = get_certificate(db, certificate_id, load_relations=False)
+
+    if "owner_id" in payload and payload["owner_id"] is not None:
+        if db.query(User).filter(User.id == payload["owner_id"]).first() is None:
+            raise ValidationAppError(f"No such user: {payload['owner_id']}")
+
+    changed: dict[str, Any] = {}
+    for field in ("auto_renew", "environment", "owner_id", "notes"):
+        if field in payload and payload[field] is not None:
+            old = getattr(cert, field)
+            new = payload[field]
+            if old != new:
+                setattr(cert, field, new)
+                changed[field] = {"old": old, "new": new}
+
+    if changed:
+        db.commit()
+        record(db, action="certificate.update", user_id=user.id if user else None,
+               username=user.username if user else None,
+               resource_type="certificate", resource_id=cert.id,
+               result=AuditResult.SUCCESS, details={"changed": changed})
+    return cert
+
+
 # ── Issue ───────────────────────────────────────────────────────────────────
 
 def _resolve_key_type(key_type: str) -> str:

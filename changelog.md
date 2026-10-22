@@ -538,6 +538,33 @@ exactly one upload endpoint, `POST /certificates/import/upload`.
 
 ---
 
+## [1.6.6] — 2026-10-22 — Edit an existing certificate's platform metadata
+
+Found while diagnosing a certificate stuck in a daily renewal-retry loop
+(an internal-only hostname that could never pass an ACME challenge): there
+was no way to turn off `auto_renew`, or change environment/notes/owner,
+on a certificate after it was issued or imported — `certificate:edit` was
+already a defined permission (granted to administrator/certificate_manager)
+but no endpoint ever implemented it.
+
+### Added
+- `PATCH /certificates/{id}` — partial update of `auto_renew`,
+  `environment`, `owner_id`, `notes`. Cryptographic material is never
+  touched by this endpoint; omitted fields are left unchanged. Gated by
+  the existing `certificate:edit` permission; changes are audit-logged
+  (`certificate.update`, before/after values).
+- Frontend: **Edit** button on the certificate detail page opens a dialog
+  for auto-renew toggle, environment, and notes.
+
+### Fixed
+- `test_fetch_combines_intermediate_and_cross_into_chain` (GoDaddy import)
+  used fake placeholder strings (`"INTERMEDIATE"`, `"CROSS"`) as chain PEM
+  content — these never were valid X.509 and only passed before the
+  1.6.5 chain-validation fix started actually parsing chain bytes. Updated
+  to generate real self-signed certificates instead.
+
+---
+
 ## [Unreleased] — Planned
 
 - SSO: LDAP/AD, OpenID Connect, OAuth2, SAML (settings scaffolding exists).

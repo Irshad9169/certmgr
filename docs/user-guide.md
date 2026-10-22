@@ -32,7 +32,8 @@ at), **CT Findings** (Certificate Transparency findings for this
 certificate's domains), **Usage Discovery** (wildcard/multi-SAN certificates
 only — see below).
 
-Actions: Renew, Revoke (with reason), Deploy, Clone, Delete, Backup.
+Actions: Renew, Revoke (with reason), Deploy, Clone, Delete, Backup, Edit
+(auto-renew, environment, notes — not the certificate/key material itself).
 
 ### Usage Discovery
 

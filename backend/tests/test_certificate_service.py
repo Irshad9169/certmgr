@@ -19,6 +19,7 @@ from app.services.certificate_service import (
     issue_certificate,
     list_certificates,
     revoke_certificate,
+    update_certificate,
 )
 from app.services.providers.base import IssueResult
 
@@ -41,6 +42,34 @@ def test_import_pem_certificate(db, sample_certificate):
     # Private key content must NOT be in the DB
     assert "PRIVATE KEY" not in repr(cert.__dict__)
     assert cert.key_path and os.path.exists(cert.key_path)
+
+
+def test_update_certificate_turns_off_auto_renew(db, sample_certificate):
+    cert = import_certificate(
+        db, cert_data=sample_certificate["cert_pem"], key_data=sample_certificate["key_pem"],
+        payload={"auto_renew": True},
+    )
+    assert cert.auto_renew is True
+    updated = update_certificate(db, cert.id, payload={"auto_renew": False})
+    assert updated.auto_renew is False
+    assert get_certificate(db, cert.id, load_relations=False).auto_renew is False
+
+
+def test_update_certificate_ignores_omitted_fields(db, sample_certificate):
+    cert = import_certificate(
+        db, cert_data=sample_certificate["cert_pem"], key_data=sample_certificate["key_pem"],
+        payload={"notes": "original"},
+    )
+    updated = update_certificate(db, cert.id, payload={"auto_renew": False})
+    assert updated.notes == "original"
+
+
+def test_update_certificate_rejects_unknown_owner(db, sample_certificate):
+    cert = import_certificate(
+        db, cert_data=sample_certificate["cert_pem"], key_data=sample_certificate["key_pem"],
+    )
+    with pytest.raises(ValidationAppError):
+        update_certificate(db, cert.id, payload={"owner_id": 999999})
 
 
 def test_import_wildcard_certificate_gets_wildcard_type(db):

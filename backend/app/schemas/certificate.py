@@ -55,6 +55,16 @@ class CloneRequest(BaseModel):
     domains: list[str] | None = None
 
 
+class CertificateUpdateRequest(BaseModel):
+    """Partial update for an existing certificate's platform metadata — not
+    its cryptographic material. Omitted fields are left unchanged."""
+
+    auto_renew: bool | None = None
+    environment: str | None = Field(default=None, max_length=32)
+    owner_id: int | None = None
+    notes: str | None = Field(default=None, max_length=4000)
+
+
 class ImportRequest(BaseModel):
     """Server-side import (from paths on the platform host)."""
 

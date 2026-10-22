@@ -33,6 +33,7 @@ import {
   Typography,
 } from '@mui/material'
 import AutorenewIcon from '@mui/icons-material/Autorenew'
+import EditIcon from '@mui/icons-material/Edit'
 import BlockIcon from '@mui/icons-material/Block'
 import RocketLaunchIcon from '@mui/icons-material/RocketLaunch'
 import ArchiveIcon from '@mui/icons-material/Archive'
@@ -122,6 +123,8 @@ export default function CertificateDetailPage() {
   const [confirm, setConfirm] = useState<null | 'renew' | 'revoke' | 'deploy' | 'delete'>(null)
   const [revokeReason, setRevokeReason] = useState('unspecified')
   const [deployTarget, setDeployTarget] = useState({ server_id: 0, method: 'sftp', target_service: 'nginx' })
+  const [editOpen, setEditOpen] = useState(false)
+  const [editForm, setEditForm] = useState({ auto_renew: true, environment: 'production', notes: '' })
 
   const [usageStatus, setUsageStatus] = useState('confirmed')
   const [usagePort, setUsagePort] = useState('')
@@ -244,6 +247,28 @@ export default function CertificateDetailPage() {
     },
   })
 
+  const editCertificate = useMutation({
+    mutationFn: () => api.patch(`/certificates/${certId}`, editForm),
+    onSuccess: () => {
+      setEditOpen(false)
+      setToast({ message: 'Certificate updated', severity: 'success' })
+      qc.invalidateQueries({ queryKey: ['cert', certId] })
+      qc.invalidateQueries({ queryKey: ['certificates'] })
+    },
+    onError: (e) => setToast({ message: apiErrorMessage(e), severity: 'error' }),
+  })
+
+  const openEdit = () => {
+    if (cert.data) {
+      setEditForm({
+        auto_renew: cert.data.auto_renew,
+        environment: cert.data.environment,
+        notes: cert.data.notes ?? '',
+      })
+    }
+    setEditOpen(true)
+  }
+
   const download = (fmt: string) => {
     const includeKey = fmt === 'key' || fmt === 'pfx' || fmt === 'zip'
     if (includeKey && !can('certificate:download_key')) {
@@ -283,6 +308,9 @@ export default function CertificateDetailPage() {
         subtitle={`Certificate #${c.id} · ${c.cert_type} · ${c.provider_name}`}
         actions={
           <>
+            {can('certificate:edit') && (
+              <Button startIcon={<EditIcon />} onClick={openEdit}>Edit</Button>
+            )}
             {can('certificate:renew') && c.managed_by_platform && (
               <Button startIcon={<AutorenewIcon />} onClick={() => setConfirm('renew')}>Renew</Button>
             )}
@@ -836,6 +864,43 @@ export default function CertificateDetailPage() {
           <Button variant="contained" startIcon={<RocketLaunchIcon />} onClick={() => action.mutate()}>
             Deploy
           </Button>
+        </DialogActions>
+      </Dialog>
+      <Dialog open={editOpen} onClose={() => setEditOpen(false)} maxWidth="xs" fullWidth>
+        <DialogTitle>Edit certificate</DialogTitle>
+        <DialogContent sx={{ display: 'flex', flexDirection: 'column', gap: 2, pt: 2 }}>
+          <FormControlLabel
+            control={
+              <Checkbox
+                checked={editForm.auto_renew}
+                onChange={(e) => setEditForm((f) => ({ ...f, auto_renew: e.target.checked }))}
+              />
+            }
+            label="Auto-renew"
+          />
+          <FormControl fullWidth>
+            <InputLabel>Environment</InputLabel>
+            <Select
+              label="Environment"
+              value={editForm.environment}
+              onChange={(e) => setEditForm((f) => ({ ...f, environment: e.target.value }))}
+            >
+              {['production', 'development', 'testing', 'qa', 'staging', 'dr'].map((s) => (
+                <MenuItem key={s} value={s}>{s}</MenuItem>
+              ))}
+            </Select>
+          </FormControl>
+          <TextField
+            label="Notes"
+            multiline
+            minRows={3}
+            value={editForm.notes}
+            onChange={(e) => setEditForm((f) => ({ ...f, notes: e.target.value }))}
+          />
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setEditOpen(false)}>Cancel</Button>
+          <Button variant="contained" onClick={() => editCertificate.mutate()}>Save</Button>
         </DialogActions>
       </Dialog>
       <Toast toast={toast} onClose={() => setToast(null)} />

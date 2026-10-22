@@ -20,6 +20,7 @@ from app.core.logging import get_logger
 from app.models.enums import AuditResult, JobTrigger, JobType
 from app.schemas.certificate import (
     CertificateOut,
+    CertificateUpdateRequest,
     CloneRequest,
     GoDaddyImportRequest,
     ImportRequest,
@@ -78,6 +79,21 @@ def list_certificates(
 @router.get("/{certificate_id}", response_model=CertificateOut)
 def get_certificate(certificate_id: int, db: DbSession, user: CurrentUser):
     return CertificateOut.model_validate(cert_service.get_certificate(db, certificate_id))
+
+
+@router.patch("/{certificate_id}", response_model=CertificateOut)
+def update_certificate(
+    certificate_id: int,
+    body: CertificateUpdateRequest,
+    db: DbSession,
+    user: CurrentUser,
+):
+    if not has_permission(user.role_name.value, Perm["edit"]):
+        raise PermissionDeniedError("You are not authorized to edit certificates")
+    cert = cert_service.update_certificate(
+        db, certificate_id, payload=body.model_dump(exclude_unset=True), user=user,
+    )
+    return CertificateOut.model_validate(cert)
 
 
 # ── Wizard validation endpoints ─────────────────────────────────────────────
