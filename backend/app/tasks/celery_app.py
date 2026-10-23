@@ -7,13 +7,32 @@ maintenance mode.
 
 from __future__ import annotations
 
+import os
+
 from celery import Celery
 from celery.schedules import crontab
+from celery.signals import worker_process_shutdown
 
 from app.core.config import settings
 from app.core.logging import get_logger
 
 logger = get_logger(__name__)
+
+
+@worker_process_shutdown.connect
+def _cleanup_prometheus_shard(pid: int | None = None, **_kwargs) -> None:
+    """worker_max_tasks_per_child recycles each of the 4 prefork children
+    periodically — without this, every recycle leaves that child's old
+    Prometheus multiproc shard file behind permanently (nothing else ever
+    deletes a *running* process's old shard once it's gone), compounding
+    the same staleness the systemd ExecStartPre sweep only catches at the
+    next full service restart. See cleanup_stale_metrics.py for the
+    startup-time counterpart."""
+    if not os.environ.get("PROMETHEUS_MULTIPROC_DIR") or pid is None:
+        return
+    from prometheus_client import multiprocess
+
+    multiprocess.mark_process_dead(pid)
 
 
 def _crontab_from_cron_string(cron_str: str, fallback: crontab) -> crontab:

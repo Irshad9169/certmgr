@@ -19,6 +19,12 @@ EnvironmentFile=/etc/certmgr/certmgr.env
 Environment=PROMETHEUS_MULTIPROC_DIR=/var/lib/certmgr/prometheus_multiproc
 ExecStartPre=/usr/bin/mkdir -p /var/lib/certmgr/prometheus_multiproc
 ExecStartPre=-/usr/bin/chmod 1777 /var/lib/certmgr/prometheus_multiproc
+# See the matching comment in certmgr-api.service — same sweep, same
+# shared directory, safe to run independently of that unit. Also matters
+# here specifically because --max-tasks-per-child=200 recycles each of
+# the 4 prefork children periodically, which otherwise leaves one more
+# orphaned shard file behind every recycle.
+ExecStartPre=-/opt/certmgr/backend/.venv/bin/python /opt/certmgr/backend/scripts/cleanup_stale_metrics.py /var/lib/certmgr/prometheus_multiproc
 ExecStart=/opt/certmgr/backend/.venv/bin/celery -A app.tasks.celery_app:celery_app worker --loglevel=INFO --concurrency=4 --max-tasks-per-child=200
 Restart=on-failure
 RestartSec=5

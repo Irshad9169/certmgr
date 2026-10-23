@@ -565,6 +565,42 @@ but no endpoint ever implemented it.
 
 ---
 
+## [1.6.7] — 2026-10-23 — Fix Grafana/CertMgr certificate-count mismatch
+
+Found on test05: the Grafana "Certificates by status" panel held a
+`discovered` status count (and others) that no longer matched any row
+in the database, while the CertMgr UI's own Dashboard page — which
+always queries the database directly — stayed correct. Root cause:
+`certmgr_certificates_total`/`certmgr_certificate_days_to_expiry` are
+fully recomputed and `.clear()`'d on every `/metrics` scrape, but only
+within whichever one of the 4 `certmgr-api` uvicorn workers happens to
+serve that particular scrape — `.clear()` only touches that worker's
+own Prometheus multiprocess shard file, so under `mostrecent`
+multiprocess mode a sibling worker's (or a dead PID's, from a past
+restart) stale last-written values kept being picked up by the
+aggregator indefinitely. `docs/administration.md` previously asserted
+these gauges were "accurate either way" under `mostrecent` mode — they
+weren't; that assumption is corrected along with the fix.
+
+### Fixed
+- `backend/scripts/cleanup_stale_metrics.py` — new script, run via
+  `ExecStartPre` in both `certmgr-api.service` and
+  `certmgr-worker.service`, that deletes a Prometheus multiprocess
+  shard file once its owning PID is confirmed dead. Only ever touches
+  dead-PID files, so it's safe to run from either unit without
+  coordinating with the other.
+- `app/tasks/celery_app.py` — `worker_process_shutdown` signal handler
+  calling `prometheus_client.multiprocess.mark_process_dead()`, so a
+  prefork child recycled by `--max-tasks-per-child=200` is cleaned up
+  the moment it exits rather than only at the next full service
+  restart.
+- `docs/administration.md` — corrected the "accurate either way" claim
+  and added one-time manual cleanup steps for existing deployments
+  (`systemctl stop` both units, clear `*.db` files, start them back up)
+  to drop whatever's already stale before the automatic fix takes over.
+
+---
+
 ## [Unreleased] — Planned
 
 - SSO: LDAP/AD, OpenID Connect, OAuth2, SAML (settings scaffolding exists).

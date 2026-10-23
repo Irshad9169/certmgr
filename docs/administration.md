@@ -439,10 +439,27 @@ read close to zero. Both `deploy/systemd/certmgr-api.service` and
 makes every process write to a shared mmap directory instead —
 `/metrics` aggregates across all of them when that variable is present,
 falling back to the normal single-process registry otherwise (local dev,
-tests). No action needed beyond deploying those unit files as-is;
+tests).
+
 `certmgr_certificates_total`/`certmgr_certificate_days_to_expiry` are
-recomputed fresh from the DB on every scrape regardless (`mostrecent`
-multiprocess mode), so they're accurate either way.
+recomputed fresh from the DB and `.clear()`'d on every scrape — but only
+within the *one* of the 4 API workers that happens to handle that
+particular request. `.clear()` only touches that worker's own shard
+file; under `mostrecent` multiprocess mode the aggregator still picks up
+whatever a sibling worker (or a long-dead PID from a previous restart)
+last wrote, however old. In practice this showed up as Grafana's
+"Certificates by status" panel holding onto a `discovered` (or other)
+status count that no longer existed in the database — a mismatch
+against CertMgr's own Dashboard page, which always queries the database
+directly and is therefore always accurate. `backend/scripts/
+cleanup_stale_metrics.py` (run via `ExecStartPre` in both units) and the
+`worker_process_shutdown` hook in `app/tasks/celery_app.py` (for
+`--max-tasks-per-child` recycling) keep this from accumulating by
+deleting a shard file as soon as its owning PID is confirmed dead —
+nothing deletes a still-running sibling's shard, so there's no race
+between the two services. A pre-existing deployment should still clear
+once manually (see below) to drop whatever's already stale; after that,
+restarting either service is self-cleaning going forward.
 
 Both units `chmod 1777` this shared directory rather than assuming a
 common group, since `certmgr-api` and `certmgr-worker` may run as
@@ -456,13 +473,18 @@ useful in `journalctl -u certmgr-api` beyond the error itself, check
 root-owned, non-world-writable directory from before this fix existed is
 the most likely cause; `chmod 1777` it manually and restart both units.
 
-Operational note: stale per-PID files can accumulate under
-`/var/lib/certmgr/prometheus_multiproc` across restarts (each process
-writes its own file, never cleaned up automatically). This is a known,
-harmless limitation of this deployment pattern — periodically clearing
-that directory with both services stopped is reasonable maintenance, not
-something to script into every restart (wiping it while the *other*
-service is still running would race).
+Operational note: this is handled automatically as of 1.6.7 (see above).
+If you're upgrading an existing install and Grafana's certificate
+figures look stale or don't match the CertMgr Dashboard page, clear the
+accumulated garbage once by hand, with both services stopped (don't do
+this while either is still running — a live process's shard file would
+be deleted out from under it):
+
+```sh
+systemctl stop certmgr-api certmgr-worker
+rm -f /var/lib/certmgr/prometheus_multiproc/*.db
+systemctl start certmgr-api certmgr-worker
+```
 
 ### Adding to an existing Prometheus + Grafana (e.g. alongside another app)
 

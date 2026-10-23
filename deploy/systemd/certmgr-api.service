@@ -33,6 +33,13 @@ ExecStartPre=/usr/bin/mkdir -p /var/lib/certmgr/prometheus_multiproc
 # certmgr-worker.service's own chmod (which runs as root there and always
 # succeeds regardless of ownership) is what actually needs to be reliable.
 ExecStartPre=-/usr/bin/chmod 1777 /var/lib/certmgr/prometheus_multiproc
+# Sweeps shard files left behind by PIDs that no longer exist (previous
+# restarts/crashes) before the new 4 workers start writing — otherwise
+# their stale last-known values linger forever in the "mostrecent"
+# multiprocess aggregate and /metrics drifts out of sync with the live
+# database. Only ever removes files for provably-dead PIDs, so it never
+# races certmgr-worker.service's own sweep of the same shared directory.
+ExecStartPre=-/opt/certmgr/backend/.venv/bin/python /opt/certmgr/backend/scripts/cleanup_stale_metrics.py /var/lib/certmgr/prometheus_multiproc
 ExecStartPre=/opt/certmgr/backend/.venv/bin/alembic upgrade head
 ExecStart=/opt/certmgr/backend/.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000 --workers 4 --proxy-headers
 Restart=on-failure
