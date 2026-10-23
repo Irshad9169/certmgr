@@ -616,6 +616,84 @@ def due_certificates(db: Session, threshold_days: int | None = None) -> list[Cer
     )
 
 
+_STALE_RENEWAL_MINUTES = 60
+
+
+def mark_stale_renewal_failed(db: Session, cert: Certificate) -> None:
+    """A worker crash or deploy restart mid-renewal leaves the row at
+    renewal_status=in_progress/status=renewing forever — nothing else ever
+    clears it, since renew_certificate() only resets these fields in its own
+    success/failure branches, both of which require the process to still be
+    alive to reach them. That in turn blocks the next renewal attempt
+    (renew_certificate's own ConflictError guard) and deletion
+    (_DELETABLE_STATUSES excludes "renewing") indefinitely. Checked lazily
+    whenever a certificate is read — mirrors
+    discovery_service.mark_stale_run_failed. Generous threshold on purpose
+    (a real certbot run can legitimately take a while) — a safety net, not
+    a tight SLA."""
+    if cert.renewal_status != RenewalStatus.IN_PROGRESS.value:
+        return
+    execution = (
+        db.query(JobExecution)
+        .filter(JobExecution.certificate_id == cert.id, JobExecution.job_type == JobType.RENEW.value,
+                JobExecution.status == JobStatus.RUNNING.value)
+        .order_by(JobExecution.started_at.desc())
+        .first()
+    )
+    started_at = execution.started_at if execution else cert.updated_at
+    if started_at is None or utcnow() - ensure_aware(started_at) < timedelta(minutes=_STALE_RENEWAL_MINUTES):
+        return
+    message = (
+        f"Marked failed: no progress for over {_STALE_RENEWAL_MINUTES} minutes — "
+        "the worker likely crashed, was restarted, or got stuck."
+    )
+    if execution:
+        execution.status = JobStatus.FAILED.value
+        execution.finished_at = utcnow()
+        execution.error_message = message
+    cert.renewal_status = RenewalStatus.FAILED.value
+    cert.renewal_error = message
+    cert.status = (
+        CertificateStatus.ACTIVE.value
+        if cert.valid_until and ensure_aware(cert.valid_until) > utcnow()
+        else CertificateStatus.EXPIRING.value
+    )
+    db.commit()
+    logger.warning("certificate #%s renewal marked failed as stale (renewal_status stuck since %s)",
+                   cert.id, started_at)
+
+
+def cancel_renewal(db: Session, cert: Certificate) -> None:
+    """Manual stop for a renewal stuck making no progress — marks it failed
+    rather than waiting out _STALE_RENEWAL_MINUTES. This only updates the
+    row; it does not (and cannot, without tracking the underlying Celery
+    task id) forcibly kill an actually-still-running certbot process. In
+    practice that's fine: the scenario this addresses is a renewal stuck on
+    something that will never make progress on its own, not a healthy
+    renewal someone wants to abort early."""
+    if cert.renewal_status != RenewalStatus.IN_PROGRESS.value:
+        raise ValidationAppError("No renewal is in progress for this certificate")
+    execution = (
+        db.query(JobExecution)
+        .filter(JobExecution.certificate_id == cert.id, JobExecution.job_type == JobType.RENEW.value,
+                JobExecution.status == JobStatus.RUNNING.value)
+        .order_by(JobExecution.started_at.desc())
+        .first()
+    )
+    if execution:
+        execution.status = JobStatus.FAILED.value
+        execution.finished_at = utcnow()
+        execution.error_message = "Cancelled by an administrator."
+    cert.renewal_status = RenewalStatus.FAILED.value
+    cert.renewal_error = "Cancelled by an administrator."
+    cert.status = (
+        CertificateStatus.ACTIVE.value
+        if cert.valid_until and ensure_aware(cert.valid_until) > utcnow()
+        else CertificateStatus.EXPIRING.value
+    )
+    db.commit()
+
+
 def renew_certificate(db: Session, certificate_id: int, *, force: bool = False,
                       user: User | None = None, trigger: str = JobTrigger.API.value) -> JobExecution:
     cert = get_certificate(db, certificate_id, load_relations=False)

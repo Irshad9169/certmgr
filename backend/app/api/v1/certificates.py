@@ -69,6 +69,8 @@ def list_certificates(
         db, search=search, filters=filters, sort_by=sort_by, sort_dir=sort_dir,
         page=page, page_size=page_size,
     )
+    for row in rows:
+        cert_service.mark_stale_renewal_failed(db, row)
     return PaginatedCertificates(
         items=[CertificateOut.model_validate(c) for c in rows],
         total=total, page=page, page_size=page_size,
@@ -78,7 +80,25 @@ def list_certificates(
 
 @router.get("/{certificate_id}", response_model=CertificateOut)
 def get_certificate(certificate_id: int, db: DbSession, user: CurrentUser):
-    return CertificateOut.model_validate(cert_service.get_certificate(db, certificate_id))
+    cert = cert_service.get_certificate(db, certificate_id)
+    cert_service.mark_stale_renewal_failed(db, cert)
+    return CertificateOut.model_validate(cert)
+
+
+@router.post("/{certificate_id}/renewal/cancel", response_model=CertificateOut)
+def cancel_renewal(certificate_id: int, db: DbSession, user: CurrentUser, request: Request):
+    """Manual stop for a renewal stuck making no progress (e.g. the worker
+    crashed or was restarted mid-renewal) — see
+    certificate_service.cancel_renewal. Same permission tier as triggering
+    a renewal."""
+    if not has_permission(user.role_name.value, Perm["renew"]):
+        raise PermissionDeniedError("You are not authorized to cancel a renewal")
+    cert = cert_service.get_certificate(db, certificate_id, load_relations=False)
+    cert_service.cancel_renewal(db, cert)
+    record(db, action="certificate.renewal.cancel", user_id=user.id, username=user.username,
+          resource_type="certificate", resource_id=cert.id, result=AuditResult.SUCCESS,
+          ip_address=get_client_ip(request), user_agent=get_user_agent(request))
+    return CertificateOut.model_validate(cert)
 
 
 @router.patch("/{certificate_id}", response_model=CertificateOut)

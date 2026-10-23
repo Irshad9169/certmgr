@@ -619,6 +619,32 @@ though that data (`by_status`) was already in the API response.
 
 ---
 
+## [1.6.9] — 2026-10-23 — Fix certificates stuck in "renewing" forever
+
+Found on test05: `track.qa1.untd.com` was stuck at status `renewing`
+since that morning, and neither Delete nor Revoke could recover it —
+Delete explicitly rejects non-`failed`/`revoked`/`archived`
+platform-managed certificates by design, and the stuck
+`renewal_status=in_progress` also blocks `renew_certificate`'s own
+re-entry guard (`ConflictError`). Root cause: a worker crash or deploy
+restart mid-renewal leaves the row at `renewing`/`in_progress` forever —
+`renew_certificate()` only clears those fields in its own success/
+failure branches, both of which require the process to still be alive
+to reach them. Same bug class as the stuck-DiscoveryRun issue fixed in
+1.6.4 (`8ebc31b`); fixed the same way here.
+
+### Added
+- `mark_stale_renewal_failed()` — checked lazily on every certificate
+  read (list and detail). A renewal stuck `in_progress` for more than an
+  hour is marked failed and the certificate returns to its normal
+  active/expiring status automatically.
+- `POST /certificates/{id}/renewal/cancel` + a **Cancel renewal** button
+  on the certificate detail page (shown while a renewal is in progress)
+  — manual, immediate version of the above for when you don't want to
+  wait out the automatic timeout. Same permission tier as Renew.
+
+---
+
 ## [Unreleased] — Planned
 
 - SSO: LDAP/AD, OpenID Connect, OAuth2, SAML (settings scaffolding exists).

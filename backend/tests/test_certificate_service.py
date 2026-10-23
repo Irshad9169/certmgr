@@ -9,15 +9,27 @@ import pytest
 from conftest import _build_pfx, _generate_self_signed  # noqa: F401
 
 from app.core.exceptions import ConflictError, NotFoundError, ValidationAppError
+from app.core.timeutils import utcnow
+from app.models.certificate import Certificate
+from app.models.enums import (
+    CertificateStatus,
+    CertificateType,
+    JobStatus,
+    RenewalStatus,
+    ValidationMethod,
+)
+from app.models.job import JobExecution
 from app.services import storage
 from app.services.certificate_service import (
     bulk_action,
+    cancel_renewal,
     delete_certificate,
     export_bundle,
     get_certificate,
     import_certificate,
     issue_certificate,
     list_certificates,
+    mark_stale_renewal_failed,
     revoke_certificate,
     update_certificate,
 )
@@ -309,6 +321,76 @@ def test_revoke_unregistered_provider_rejected_cleanly(db, sample_certificate):
 
     with pytest.raises(ValidationAppError):
         revoke_certificate(db, cert.id)
+
+
+def _stuck_renewing_cert(db, *, started_minutes_ago: int) -> Certificate:
+    cert = Certificate(
+        domain="stuck.example.com", cert_name="stuck.example.com", sans=["stuck.example.com"],
+        cert_type=CertificateType.SINGLE.value, validation_method=ValidationMethod.HTTP_01.value,
+        status=CertificateStatus.RENEWING.value, renewal_status=RenewalStatus.IN_PROGRESS.value,
+        managed_by_platform=True,
+    )
+    db.add(cert)
+    db.flush()
+    from datetime import timedelta
+
+    execution = JobExecution(
+        job_type="renew", certificate_id=cert.id, status=JobStatus.RUNNING.value,
+        started_at=utcnow() - timedelta(minutes=started_minutes_ago),
+    )
+    db.add(execution)
+    db.commit()
+    return cert
+
+
+def test_mark_stale_renewal_failed_clears_a_long_stuck_renewal(db):
+    """A worker crash mid-renewal leaves status=renewing/renewal_status=
+    in_progress forever — nothing else ever resets it, which in turn blocks
+    the next renew attempt (ConflictError) and delete (_DELETABLE_STATUSES
+    excludes renewing) indefinitely."""
+    cert = _stuck_renewing_cert(db, started_minutes_ago=90)
+
+    mark_stale_renewal_failed(db, cert)
+
+    assert cert.renewal_status == "failed"
+    assert cert.status in ("active", "expiring")
+    assert "stale" in (cert.renewal_error or "").lower() or "minutes" in (cert.renewal_error or "")
+
+
+def test_mark_stale_renewal_failed_leaves_a_recent_renewal_alone(db):
+    cert = _stuck_renewing_cert(db, started_minutes_ago=5)
+
+    mark_stale_renewal_failed(db, cert)
+
+    assert cert.renewal_status == "in_progress"
+    assert cert.status == "renewing"
+
+
+def test_mark_stale_renewal_failed_is_a_noop_when_not_renewing(db, sample_certificate):
+    cert = import_certificate(db, cert_data=sample_certificate["cert_pem"],
+                              key_data=sample_certificate["key_pem"])
+    mark_stale_renewal_failed(db, cert)  # must not raise or touch an unrelated cert
+    assert cert.status == "active"
+
+
+def test_cancel_renewal_immediately_unsticks_a_renewal(db):
+    """Unlike mark_stale_renewal_failed, an explicit cancel doesn't wait out
+    the staleness window — the admin is overriding deliberately."""
+    cert = _stuck_renewing_cert(db, started_minutes_ago=2)
+
+    cancel_renewal(db, cert)
+
+    assert cert.renewal_status == "failed"
+    assert cert.status in ("active", "expiring")
+    execution = db.query(JobExecution).filter(JobExecution.certificate_id == cert.id).first()
+    assert execution.status == "failed"
+
+
+def test_cancel_renewal_rejects_a_certificate_not_mid_renewal(db, sample_certificate):
+    cert = import_certificate(db, cert_data=sample_certificate["cert_pem"],
+                              key_data=sample_certificate["key_pem"])
+    with pytest.raises(ValidationAppError):
+        cancel_renewal(db, cert)
 
 
 def test_delete_revoked_certificate(db, sample_certificate, admin_user):

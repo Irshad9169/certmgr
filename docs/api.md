@@ -30,6 +30,7 @@ Common codes: `UNAUTHORIZED`, `FORBIDDEN`, `VALIDATION_ERROR`, `NOT_FOUND`,
 | PATCH | `/certificates/{id}` | Edit platform metadata (`auto_renew`, `environment`, `owner_id`, `notes`) — never the cert/key material (`certificate:edit`) |
 | POST | `/certificates/issue` | Issue (wizard payload) — returns queued or completed |
 | POST | `/certificates/{id}/renew` | Renew (`{force}`) |
+| POST | `/certificates/{id}/renewal/cancel` | Cancel a renewal stuck in progress (e.g. after a worker crash mid-renewal) — returns the certificate to its normal status (`certificate:renew`) |
 | POST | `/certificates/{id}/revoke` | Revoke (`{reason, delete_after}`) |
 | POST | `/certificates/{id}/clone` | Clone to new domains |
 | POST | `/certificates/import/upload` | Multipart import (cert/key/chain/pfx) |

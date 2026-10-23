@@ -35,6 +35,13 @@ only — see below).
 Actions: Renew, Revoke (with reason), Deploy, Clone, Delete, Backup, Edit
 (auto-renew, environment, notes — not the certificate/key material itself).
 
+If a renewal is interrupted (e.g. the worker process crashes or is
+restarted mid-renewal), the certificate is left showing status
+**renewing** and blocks a new renewal attempt. This clears itself
+automatically after about an hour, or a **Cancel renewal** button
+appears on the detail page (same permission tier as Renew) to unstick
+it immediately.
+
 ### Usage Discovery
 
 For a wildcard (`*.example.com`) or multi-domain (SAN) certificate, this tab

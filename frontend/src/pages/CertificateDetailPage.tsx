@@ -33,6 +33,7 @@ import {
   Typography,
 } from '@mui/material'
 import AutorenewIcon from '@mui/icons-material/Autorenew'
+import CancelIcon from '@mui/icons-material/Cancel'
 import EditIcon from '@mui/icons-material/Edit'
 import BlockIcon from '@mui/icons-material/Block'
 import RocketLaunchIcon from '@mui/icons-material/RocketLaunch'
@@ -120,7 +121,7 @@ export default function CertificateDetailPage() {
   const qc = useQueryClient()
   const [tab, setTab] = useState(0)
   const [toast, setToast] = useState<{ message: string; severity: 'success' | 'error' } | null>(null)
-  const [confirm, setConfirm] = useState<null | 'renew' | 'revoke' | 'deploy' | 'delete'>(null)
+  const [confirm, setConfirm] = useState<null | 'renew' | 'revoke' | 'deploy' | 'delete' | 'cancel-renewal'>(null)
   const [revokeReason, setRevokeReason] = useState('unspecified')
   const [deployTarget, setDeployTarget] = useState({ server_id: 0, method: 'sftp', target_service: 'nginx' })
   const [editOpen, setEditOpen] = useState(false)
@@ -217,6 +218,7 @@ export default function CertificateDetailPage() {
       if (confirm === 'renew') return api.post(`/certificates/${certId}/renew`, { force: false })
       if (confirm === 'revoke') return api.post(`/certificates/${certId}/revoke`, { reason: revokeReason, delete_after: true })
       if (confirm === 'delete') return api.delete(`/certificates/${certId}`)
+      if (confirm === 'cancel-renewal') return api.post(`/certificates/${certId}/renewal/cancel`)
       if (confirm === 'deploy') {
         if (!deployTarget.server_id) throw new Error('Select a target server')
         return api.post('/deployments', {
@@ -313,6 +315,11 @@ export default function CertificateDetailPage() {
             )}
             {can('certificate:renew') && c.managed_by_platform && (
               <Button startIcon={<AutorenewIcon />} onClick={() => setConfirm('renew')}>Renew</Button>
+            )}
+            {can('certificate:renew') && c.renewal_status === 'in_progress' && (
+              <Button color="warning" startIcon={<CancelIcon />} onClick={() => setConfirm('cancel-renewal')}>
+                Cancel renewal
+              </Button>
             )}
             {can('certificate:deploy') && (
               <Button startIcon={<RocketLaunchIcon />} onClick={() => setConfirm('deploy')}>Deploy</Button>
@@ -790,6 +797,14 @@ export default function CertificateDetailPage() {
         title="Renew this certificate?"
         body="A renewal attempt will be executed for this certificate."
         confirmLabel="Renew"
+        onConfirm={() => action.mutate()}
+        onClose={() => setConfirm(null)}
+      />
+      <ConfirmDialog
+        open={confirm === 'cancel-renewal'}
+        title="Cancel this stuck renewal?"
+        body="Marks the in-progress renewal as failed and returns the certificate to its normal status, so it can be renewed, revoked, or deleted again. Use this when a renewal has been stuck for a while — e.g. after a worker crash or restart mid-renewal — rather than waiting for it to clear automatically."
+        confirmLabel="Cancel renewal"
         onConfirm={() => action.mutate()}
         onClose={() => setConfirm(null)}
       />
