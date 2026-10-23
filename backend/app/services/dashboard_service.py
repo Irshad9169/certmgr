@@ -34,6 +34,7 @@ def dashboard_stats(db: Session) -> dict[str, Any]:
     total = db.query(func.count(Certificate.id)).scalar() or 0
     active = db.query(func.count(Certificate.id)).filter(Certificate.status == CertificateStatus.ACTIVE.value).scalar() or 0
     expired = db.query(func.count(Certificate.id)).filter(Certificate.status == CertificateStatus.EXPIRED.value).scalar() or 0
+    renewing = db.query(func.count(Certificate.id)).filter(Certificate.status == CertificateStatus.RENEWING.value).scalar() or 0
     revoked = db.query(func.count(Certificate.id)).filter(Certificate.status == CertificateStatus.REVOKED.value).scalar() or 0
     imported = db.query(func.count(Certificate.id)).filter(Certificate.imported.is_(True)).scalar() or 0
     failures = (
@@ -72,8 +73,8 @@ def dashboard_stats(db: Session) -> dict[str, Any]:
 
     return {
         "totals": {
-            "total": total, "active": active, "expired": expired, "revoked": revoked,
-            "imported": imported, "failures_7d": failures,
+            "total": total, "active": active, "expired": expired, "renewing": renewing,
+            "revoked": revoked, "imported": imported, "failures_7d": failures,
             "expiring_60": _expiring_counts(db, 60),
             "expiring_30": _expiring_counts(db, 30),
             "expiring_7": _expiring_counts(db, 7),

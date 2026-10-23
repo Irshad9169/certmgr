@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import {
   Box,
   Button,
@@ -71,12 +71,13 @@ export default function CertificatesPage() {
   const navigate = useNavigate()
   const { can } = useAuth()
   const qc = useQueryClient()
+  const [searchParams] = useSearchParams()
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(25)
   const [sortBy, setSortBy] = useState('valid_until')
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc')
   const [filters, setFilters] = useState<Filters>({
-    search: '', status: '', environment: '', provider: '', key_type: '', auto_renew: '',
+    search: '', status: searchParams.get('status') || '', environment: '', provider: '', key_type: '', auto_renew: '',
   })
   const [selected, setSelected] = useState<number[]>([])
   const [bulkAction, setBulkAction] = useState<null | 'renew' | 'revoke' | 'delete' | 'usage_scan'>(null)

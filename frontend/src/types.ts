@@ -150,6 +150,7 @@ export interface DashboardStats {
     total: number
     active: number
     expired: number
+    renewing: number
     revoked: number
     imported: number
     failures_7d: number

@@ -601,6 +601,24 @@ weren't; that assumption is corrected along with the fix.
 
 ---
 
+## [1.6.8] — 2026-10-23 — Dashboard: Active/Expired/Renewing tiles + expiry-window dropdown
+
+Requested after reconciling Grafana against the CertMgr Dashboard page
+(1.6.7): the dashboard showed Total/Expiring 60d/30d/7d as three
+separate fixed tiles with no Active/Expired/Renewing breakdown, even
+though that data (`by_status`) was already in the API response.
+
+### Added
+- `GET /dashboard/stats` `totals` now also includes `renewing` (alongside
+  the existing `active`/`expired`).
+- Dashboard page: Total, Active, Expiring, Expired, and Renewing tiles.
+  The Expiring tile has a 7/30/60-day dropdown in place of three
+  separate tiles. All five tiles link to the Certificates list
+  pre-filtered by status (via `?status=`), which now reads its initial
+  filter from the URL.
+
+---
+
 ## [Unreleased] — Planned
 
 - SSO: LDAP/AD, OpenID Connect, OAuth2, SAML (settings scaffolding exists).
